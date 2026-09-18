@@ -1,0 +1,520 @@
+################################################################################
+# Mediastack: Plex, *arr, Musik und Paperless auf Linux Mint
+#
+# Architektur, die drei Dinge, die man wissen muss:
+#
+#   1. qBittorrent hat KEIN eigenes Netz, es teilt den Namespace von gluetun.
+#      Sonarr/Radarr erreichen es unter http://gluetun:8080, nicht unter
+#      http://qbittorrent:8080. Haeufigste Fehlerquelle ueberhaupt.
+#
+#   2. Plex und Caddy laufen im HOST-Netz. Plex wegen GDM-Discovery und
+#      eigenem Remote-Zugriff, Caddy weil es das tailscale0-Interface sehen
+#      muss, um private Subdomains per "bind" daran zu fesseln. Caddy spricht
+#      seine Upstreams deshalb ueber 127.0.0.1:<port> an.
+#
+#   3. /data ist EIN gemeinsamer Mount. Nur so kann hardlinken statt kopieren.
+#      Paperless hat seinen eigenen Baum unter ${PAPERLESS_ROOT}.
+#
+# Installation:  sudo ./setup.sh
+################################################################################
+
+x-env: &env
+  PUID: ${PUID}
+  PGID: ${PGID}
+  TZ: ${TZ}
+  UMASK: "002"
+
+x-base: &base
+  restart: unless-stopped
+  networks: [media]
+
+# Fuer Container ohne eigenes Netz (im gluetun-Namespace).
+x-base-nonet: &base-nonet
+  restart: unless-stopped
+
+networks:
+  media:
+    name: media
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET}
+
+services:
+
+  # ============================================================== VPN-Tunnel
+  gluetun:
+    <<: *base
+    image: qmcgaw/gluetun:v3
+    container_name: gluetun
+    profiles: [torrent]
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TZ: ${TZ}
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${PROTON_WG_PRIVATE_KEY}
+      SERVER_COUNTRIES: ${VPN_COUNTRIES}
+      VPN_PORT_FORWARDING: "on"
+      VPN_PORT_FORWARDING_PROVIDER: protonvpn
+      PORT_FORWARD_ONLY: "on"
+      # Ohne diese Zeile kaeme Sonarr nicht an die qBittorrent-WebUI heran,
+      # weil gluetuns Firewall allen Nicht-VPN-Traffic verwirft.
+      FIREWALL_OUTBOUND_SUBNETS: ${DOCKER_SUBNET},${LAN_SUBNET}
+      DOT: "on"
+      # Meldet den von Proton zugewiesenen Port an qBittorrent. Setzt voraus,
+      # dass in qBittorrent "Bypass authentication for clients on localhost"
+      # aktiv ist. Siehe docs/02-inbetriebnahme.md.
+      VPN_PORT_FORWARDING_UP_COMMAND: >-
+        /bin/sh -c 'wget -O- -nv --retry-connrefused --post-data "json={\"listen_port\":{{PORT}},\"current_network_interface\":\"{{VPN_INTERFACE}}\",\"random_port\":false,\"upnp\":false}" http://127.0.0.1:8080/api/v2/app/setPreferences'
+      VPN_PORT_FORWARDING_DOWN_COMMAND: >-
+        /bin/sh -c 'wget -O- -nv --retry-connrefused --post-data "json={\"listen_port\":0,\"current_network_interface\":\"lo\"}" http://127.0.0.1:8080/api/v2/app/setPreferences'
+    volumes:
+      - ./config/gluetun:/gluetun
+    ports:
+      - 8080:8080   # qBittorrent WebUI, laeuft in diesem Namespace
+
+  # =========================================================== Download-Clients
+  qbittorrent:
+    <<: *base-nonet
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    profiles: [torrent]
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      <<: *env
+      WEBUI_PORT: 8080
+      TORRENTING_PORT: 6881
+    volumes:
+      - ./config/qbittorrent:/config
+      - ${DATA_ROOT}:/data
+
+  sabnzbd:
+    <<: *base
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    profiles: [usenet]
+    environment: *env
+    volumes:
+      - ./config/sabnzbd:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - 8081:8080   # 8080 ist an gluetun vergeben
+
+  # ============================================================= Indexer-Proxy
+  prowlarr:
+    <<: *base
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment: *env
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - 9696:9696
+
+  # ================================================================= *arr-Apps
+  sonarr:
+    <<: *base
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment: *env
+    volumes:
+      - ./config/sonarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - 8989:8989
+
+  radarr:
+    <<: *base
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment: *env
+    volumes:
+      - ./config/radarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - 7878:7878
+
+  # ACHTUNG: develop statt latest. Tubifarry installiert sich ueber
+  # "System -> Plugins", und dieses Menue existiert nur in den
+  # plugin-faehigen Builds. Damit laeuft Lidarr auf einem Entwicklungszweig,
+  # also mit hoeherem Regressionsrisiko als Sonarr und Radarr.
+  # ffmpeg und nodejs kommen per LSIO-Mod dazu, Tubifarry braucht beides:
+  # ffmpeg zum Konvertieren, nodejs fuer den Trusted-Session-Generator.
+  lidarr:
+    <<: *base
+    image: lscr.io/linuxserver/lidarr:develop
+    container_name: lidarr
+    environment:
+      <<: *env
+      DOCKER_MODS: linuxserver/mods:universal-package-install
+      INSTALL_PACKAGES: ffmpeg|nodejs|npm
+    volumes:
+      - ./config/lidarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - 8686:8686
+
+  bazarr:
+    <<: *base
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment: *env
+    volumes:
+      - ./config/bazarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - 6767:6767
+
+  # =============================================================== Mediaserver
+  # Host-Netz wegen GDM-Discovery und Plex-eigenem Remote-Zugriff.
+  # /dev/shm als Transcode-Ziel spart SSD-Schreibzyklen (in Plex unter
+  # Einstellungen > Transcoder > "Transcoder temporary directory" eintragen).
+  plex:
+    restart: unless-stopped
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    network_mode: host
+    environment:
+      <<: *env
+      VERSION: docker
+      PLEX_CLAIM: ${PLEX_CLAIM}
+    devices:
+      - /dev/dri:/dev/dri      # Intel QuickSync
+    group_add:
+      - ${RENDER_GID}
+    volumes:
+      - ./config/plex:/config
+      - ${DATA_ROOT}/media:/data/media
+      - /dev/shm:/transcode
+
+  # Musikserver mit Subsonic-API. Liest dieselben Dateien wie Plex, nur
+  # lesend. Damit funktionieren Symfonium, Amperfy, substreamer und rund
+  # fuenfzig weitere Clients, und Plexamp bleibt parallel nutzbar.
+  navidrome:
+    <<: *base
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    user: ${PUID}:${PGID}
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_SCANSCHEDULE: 1h
+      ND_LOGLEVEL: info
+      ND_SESSIONTIMEOUT: 24h
+      # Transcoding fuers Auto: unterwegs reicht Opus, spart Datenvolumen.
+      ND_ENABLETRANSCODINGCONFIG: "true"
+      ND_DEFAULTTHEME: Dark
+      ND_SUBSONICARTISTPARTICIPATIONS: "true"
+    volumes:
+      - ./config/navidrome:/data
+      - ${DATA_ROOT}/media/music:/music:ro
+    ports:
+      - 4533:4533
+
+  audiobookshelf:
+    <<: *base
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ./config/audiobookshelf/config:/config
+      - ./config/audiobookshelf/metadata:/metadata
+      - ${DATA_ROOT}/media/audiobooks:/audiobooks
+      - ${DATA_ROOT}/media/books:/books
+    ports:
+      - 13378:80
+
+  # ================================================================= Requests
+  overseerr:
+    <<: *base
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: overseerr
+    environment: *env
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./config/overseerr:/config
+    ports:
+      - 5055:5055
+
+  # ============================================================== Paperless-ngx
+  # Fuenf Container. OCR ist das CPU-hungrigste im ganzen Stack, ein
+  # mehrseitiger Scan belegt alle Kerne. Das konkurriert mit
+  # Plex-Transcoding, deshalb laeuft der Consumer mit niedriger Prioritaet.
+  paperless-db:
+    <<: *base
+    image: postgres:17-alpine
+    container_name: paperless-db
+    profiles: [docs]
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: ${PAPERLESS_DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - ./config/paperless-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperless -d paperless"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  paperless-redis:
+    <<: *base
+    image: redis:7-alpine
+    container_name: paperless-redis
+    profiles: [docs]
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - ./config/paperless-redis:/data
+
+  paperless-gotenberg:
+    <<: *base
+    image: gotenberg/gotenberg:8
+    container_name: paperless-gotenberg
+    profiles: [docs]
+    # Von Paperless so vorgegeben: JavaScript aus, Dateizugriff begrenzt.
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+
+  paperless-tika:
+    <<: *base
+    image: apache/tika:latest
+    container_name: paperless-tika
+    profiles: [docs]
+
+  paperless:
+    <<: *base
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless
+    profiles: [docs]
+    depends_on:
+      paperless-db:
+        condition: service_healthy
+      paperless-redis:
+        condition: service_started
+    environment:
+      USERMAP_UID: ${PUID}
+      USERMAP_GID: ${PGID}
+      PAPERLESS_TIME_ZONE: ${TZ}
+      PAPERLESS_URL: https://${PAPERLESS_DOMAIN}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_DBHOST: paperless-db
+      PAPERLESS_DBNAME: paperless
+      PAPERLESS_DBUSER: paperless
+      PAPERLESS_DBPASS: ${PAPERLESS_DB_PASSWORD}
+      PAPERLESS_REDIS: redis://paperless-redis:6379
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://paperless-gotenberg:3000
+      PAPERLESS_TIKA_ENDPOINT: http://paperless-tika:9998
+      # Deutsch zuerst. Ohne deu erkennt Tesseract Umlaute und deutsche
+      # Wortformen schlecht. OCR_LANGUAGES installiert die Sprachdaten.
+      PAPERLESS_OCR_LANGUAGE: deu+eng
+      PAPERLESS_OCR_LANGUAGES: deu eng
+      PAPERLESS_OCR_MODE: skip          # kein OCR, wenn schon Text drin ist
+      PAPERLESS_OCR_SKIP_ARCHIVE_FILE: never
+      # Eingangsordner wird von rclone aus OneDrive gefuellt.
+      PAPERLESS_CONSUMER_POLLING: 30
+      PAPERLESS_CONSUMER_RECURSIVE: 1
+      PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS: 1
+      PAPERLESS_CONSUMER_DELETE_DUPLICATES: "true"
+      PAPERLESS_FILENAME_FORMAT: "{{ created_year }}/{{ correspondent }}/{{ created }} {{ title }}"
+      PAPERLESS_FILENAME_FORMAT_REMOVE_NONE: "true"
+      PAPERLESS_TASK_WORKERS: 2
+      PAPERLESS_THREADS_PER_WORKER: 2
+      PAPERLESS_ADMIN_USER: ${PAPERLESS_ADMIN_USER}
+      PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
+    volumes:
+      # data/ = Suchindex und interner Zustand, media/ = das Archiv.
+      # WICHTIG: media/ wird NIEMALS mit OneDrive synchronisiert, Paperless
+      # besitzt diese Pfade und die Datenbank verweist darauf.
+      # Siehe docs/06-paperless-onedrive.md.
+      - ${PAPERLESS_ROOT}/data:/usr/src/paperless/data
+      - ${PAPERLESS_ROOT}/media:/usr/src/paperless/media
+      - ${PAPERLESS_ROOT}/consume:/usr/src/paperless/consume
+      - ${PAPERLESS_ROOT}/export:/usr/src/paperless/export
+    ports:
+      - 8000:8000
+
+  # ======================================================= Qualitaet & Pflege
+  recyclarr:
+    <<: *base
+    image: ghcr.io/recyclarr/recyclarr:latest
+    container_name: recyclarr
+    user: ${PUID}:${PGID}
+    environment:
+      TZ: ${TZ}
+      CRON_SCHEDULE: "0 4 * * *"
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      RADARR_API_KEY: ${RADARR_API_KEY}
+    volumes:
+      - ./recyclarr:/config
+
+  cleanuparr:
+    <<: *base
+    image: ghcr.io/cleanuparr/cleanuparr:latest
+    container_name: cleanuparr
+    environment:
+      TZ: ${TZ}
+      PORT: 11011
+    volumes:
+      - ./config/cleanuparr:/config
+    ports:
+      - 11011:11011
+
+  unpackerr:
+    <<: *base
+    image: ghcr.io/unpackerr/unpackerr:latest
+    container_name: unpackerr
+    user: ${PUID}:${PGID}
+    environment:
+      TZ: ${TZ}
+      UN_SONARR_0_URL: http://sonarr:8989
+      UN_SONARR_0_API_KEY: ${SONARR_API_KEY}
+      UN_SONARR_0_PATHS_0: /data/torrents/tv
+      UN_RADARR_0_URL: http://radarr:7878
+      UN_RADARR_0_API_KEY: ${RADARR_API_KEY}
+      UN_RADARR_0_PATHS_0: /data/torrents/movies
+      UN_LIDARR_0_URL: http://lidarr:8686
+      UN_LIDARR_0_API_KEY: ${LIDARR_API_KEY}
+      UN_LIDARR_0_PATHS_0: /data/torrents/music
+    volumes:
+      - ${DATA_ROOT}:/data
+
+  # Gedrosselter Ersatz fuer Huntarr, siehe README.
+  backfill:
+    <<: *base
+    image: python:3.13-alpine
+    container_name: backfill
+    command: ["python", "-u", "/app/backfill.py"]
+    environment:
+      TZ: ${TZ}
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: ${RADARR_API_KEY}
+      LIDARR_URL: http://lidarr:8686
+      LIDARR_API_KEY: ${LIDARR_API_KEY}
+      ITEMS_PER_CYCLE: ${BACKFILL_ITEMS_PER_CYCLE}
+      CYCLE_MINUTES: ${BACKFILL_CYCLE_MINUTES}
+      SEARCH_UPGRADES: ${BACKFILL_SEARCH_UPGRADES}
+    volumes:
+      - ./scripts/backfill.py:/app/backfill.py:ro
+
+  # ============================================================ Plex-Zusaetze
+  tautulli:
+    <<: *base
+    image: lscr.io/linuxserver/tautulli:latest
+    container_name: tautulli
+    environment: *env
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./config/tautulli:/config
+    ports:
+      - 8181:8181
+
+  kometa:
+    <<: *base
+    image: kometateam/kometa:latest
+    container_name: kometa
+    profiles: [extras]
+    environment:
+      TZ: ${TZ}
+      KOMETA_RUN: "false"
+      KOMETA_TIME: "05:00"
+      KOMETA_NO_MISSING: "true"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./config/kometa:/config
+
+  # ================================================ Dashboard & Ueberwachung
+  homepage:
+    <<: *base
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    environment:
+      <<: *env
+      HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
+      HOMEPAGE_VAR_SONARR_KEY: ${SONARR_API_KEY}
+      HOMEPAGE_VAR_RADARR_KEY: ${RADARR_API_KEY}
+      HOMEPAGE_VAR_LIDARR_KEY: ${LIDARR_API_KEY}
+      HOMEPAGE_VAR_PROWLARR_KEY: ${PROWLARR_API_KEY}
+      HOMEPAGE_VAR_BAZARR_KEY: ${BAZARR_API_KEY}
+      HOMEPAGE_VAR_SABNZBD_KEY: ${SABNZBD_API_KEY}
+      HOMEPAGE_VAR_TAUTULLI_KEY: ${TAUTULLI_API_KEY}
+      HOMEPAGE_VAR_OVERSEERR_KEY: ${OVERSEERR_API_KEY}
+      HOMEPAGE_VAR_QBIT_USER: ${QBIT_USER}
+      HOMEPAGE_VAR_QBIT_PASS: ${QBIT_PASS}
+      HOMEPAGE_VAR_DOMAIN: ${BASE_DOMAIN}
+    volumes:
+      - ./homepage:/app/config
+    ports:
+      - 3000:3000
+
+  uptime-kuma:
+    <<: *base
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    volumes:
+      - ./config/uptime-kuma:/app/data
+    ports:
+      - 3001:3001
+
+  # Die devices-Liste muss zu "lsblk -d" passen, sonst startet der Container
+  # nicht. Deshalb steckt es im Profil extras und laeuft nicht automatisch.
+  scrutiny:
+    <<: *base
+    image: ghcr.io/analogj/scrutiny:master-omnibus
+    container_name: scrutiny
+    profiles: [extras]
+    cap_add: [SYS_RAWIO]
+    volumes:
+      - ./config/scrutiny/config:/opt/scrutiny/config
+      - ./config/scrutiny/influxdb:/opt/scrutiny/influxdb
+      - /run/udev:/run/udev:ro
+    devices:
+      - /dev/sda:/dev/sda
+      - /dev/nvme0n1:/dev/nvme0n1
+    ports:
+      - 8082:8080
+
+  # ============================================================== Reverse Proxy
+  # Host-Netz, weil Caddy das tailscale0-Interface sehen muss: die privaten
+  # Subdomains werden per "bind" an die Tailscale-Adresse gefesselt und haben
+  # am oeffentlichen Interface damit gar keinen Listener. Ein Angreifer, der
+  # die Heim-IP kennt, kann sie also nicht per Host-Header erreichen.
+  # Upstreams laufen deshalb ueber 127.0.0.1:<port>.
+  # Eigener Build wegen des Azure-DNS-Moduls fuer die DNS-01-Challenge.
+  caddy:
+    restart: unless-stopped
+    build:
+      context: ./caddy
+    image: mediastack/caddy-azure:local
+    container_name: caddy
+    profiles: [proxy]
+    network_mode: host
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      BASE_DOMAIN: ${BASE_DOMAIN}
+      TAILSCALE_IP: ${TAILSCALE_IP}
+      ACME_EMAIL: ${ACME_EMAIL}
+      AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID}
+      AZURE_RESOURCE_GROUP_NAME: ${AZURE_RESOURCE_GROUP_NAME}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./config/caddy/data:/data
+      - ./config/caddy/config:/config

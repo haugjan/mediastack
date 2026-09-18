@@ -1,0 +1,152 @@
+# Alle Dienste unter Subdomains von {$BASE_DOMAIN}, mit echten Zertifikaten.
+#
+# Das Zertifikat kommt per DNS-01-Challenge ueber Azure DNS. Dafuer muss
+# NICHTS aus dem Internet erreichbar sein, Caddy setzt nur einen TXT-Record
+# in der Zone. Ein Wildcard deckt alle Subdomains auf einmal ab.
+#
+# Die Trennung oeffentlich / privat passiert ueber "bind":
+#
+#   - requests.<domain> hat KEIN bind, lauscht also auf allen Interfaces und
+#     ist ueber die Portweiterleitung am Router erreichbar.
+#   - Alle anderen Namen sind an {$TAILSCALE_IP} gebunden. Am oeffentlichen
+#     Interface existiert fuer sie kein Listener. Wer die Heim-IP kennt und
+#     "Host: paperless.<domain>" schickt, landet deshalb nirgends.
+#
+# Das ist der entscheidende Unterschied zu einer reinen DNS-Loesung: ein
+# A-Record auf die Tailscale-IP allein wuerde diesen Umweg nicht verhindern.
+{
+	email {$ACME_EMAIL}
+
+	# Gilt fuer alle Sites: Zertifikate per Azure DNS statt per HTTP.
+	acme_dns azure {
+		subscription_id {$AZURE_SUBSCRIPTION_ID}
+		resource_group_name {$AZURE_RESOURCE_GROUP_NAME}
+		tenant_id {$AZURE_TENANT_ID}
+		client_id {$AZURE_CLIENT_ID}
+		client_secret {$AZURE_CLIENT_SECRET}
+	}
+
+	# Zum Testen einkommentieren, damit du nicht ins Let's-Encrypt-Limit
+	# laeufst. Browser meckern dann ueber das Zertifikat, das ist erwartet.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# Gemeinsame Header fuer alles.
+(sane_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+# Zweiter Riegel zusaetzlich zum bind: nur private Adressbereiche.
+# Tailnet ist 100.64.0.0/10 (CGNAT-Bereich).
+(private_only) {
+	@public not remote_ip 100.64.0.0/10 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 127.0.0.1/32
+	respond @public "Not available" 403 {
+		close
+	}
+}
+
+# Caddy laeuft im Host-Netz, spricht Upstreams also ueber 127.0.0.1 an.
+(private_app) {
+	bind {$TAILSCALE_IP}
+	import sane_headers
+	import private_only
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:{args[0]}
+}
+
+# ============================================================== OEFFENTLICH
+# Der einzige Name, der aus dem Internet erreichbar ist.
+requests.{$BASE_DOMAIN} {
+	import sane_headers
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:5055
+	log {
+		output file /data/requests-access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
+
+# ================================================================== PRIVAT
+# Alles ab hier nur aus dem Tailnet erreichbar.
+
+# Dokumente. Steuerunterlagen und Vertraege, niemals oeffentlich.
+paperless.{$BASE_DOMAIN} {
+	import private_app 8000
+	# Scans koennen gross sein.
+	request_body {
+		max_size 200MB
+	}
+}
+
+# Musik. Subsonic-API fuer Symfonium, Amperfy und Co.
+music.{$BASE_DOMAIN} {
+	import private_app 4533
+}
+
+# Hoerbuecher und E-Books.
+books.{$BASE_DOMAIN} {
+	import private_app 13378
+}
+
+# Dashboard.
+home.{$BASE_DOMAIN} {
+	import private_app 3000
+}
+
+# Automation.
+sonarr.{$BASE_DOMAIN} {
+	import private_app 8989
+}
+
+radarr.{$BASE_DOMAIN} {
+	import private_app 7878
+}
+
+lidarr.{$BASE_DOMAIN} {
+	import private_app 8686
+}
+
+prowlarr.{$BASE_DOMAIN} {
+	import private_app 9696
+}
+
+bazarr.{$BASE_DOMAIN} {
+	import private_app 6767
+}
+
+# Downloads.
+qbit.{$BASE_DOMAIN} {
+	import private_app 8080
+}
+
+sab.{$BASE_DOMAIN} {
+	import private_app 8081
+}
+
+# Betrieb.
+status.{$BASE_DOMAIN} {
+	import private_app 3001
+}
+
+disks.{$BASE_DOMAIN} {
+	import private_app 8082
+}
+
+clean.{$BASE_DOMAIN} {
+	import private_app 11011
+}
+
+stats.{$BASE_DOMAIN} {
+	import private_app 8181
+}
+
+# Plex laeuft bewusst NICHT hier durch. Es loest seinen Fernzugriff ueber
+# eigene Server und ist unter <host>:32400/web direkt erreichbar. Ein
+# Reverse Proxy davor bringt nichts und bricht Direct Play.

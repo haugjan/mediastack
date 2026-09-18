@@ -1,0 +1,135 @@
+---
+# VORLAGE. setup.sh erzeugt daraus homepage/services.yaml und ersetzt die
+# Platzhalter passend zum gewaehlten Zugriffsweg: entweder
+# https://<name>.<domain> oder http://<lan-ip>:<port>.
+#
+# Nicht die erzeugte services.yaml bearbeiten, die wird ueberschrieben.
+# Aenderungen gehoeren in diese Vorlage.
+#
+# href       = was dein Browser oeffnet.
+# widget.url = was der Homepage-Container anspricht, immer der Docker-Name.
+
+- Medien:
+    - Plex:
+        icon: plex.png
+        href: __URL_PLEX__
+        description: Filme und Serien
+        widget:
+          type: tautulli
+          url: http://tautulli:8181
+          key: "{{HOMEPAGE_VAR_TAUTULLI_KEY}}"
+
+    - Navidrome:
+        icon: navidrome.png
+        href: __URL_NAVIDROME__
+        description: Musik, auch fuers Auto
+
+    - Audiobookshelf:
+        icon: audiobookshelf.png
+        href: __URL_AUDIOBOOKSHELF__
+        description: Hoerbuecher und E-Books
+
+    - Overseerr:
+        icon: overseerr.png
+        href: __URL_OVERSEERR__
+        description: Wuensche eintragen
+        widget:
+          type: overseerr
+          url: http://overseerr:5055
+          key: "{{HOMEPAGE_VAR_OVERSEERR_KEY}}"
+
+- Dokumente:
+    - Paperless:
+        icon: paperless-ngx.png
+        href: __URL_PAPERLESS__
+        description: Dokumentenarchiv, Volltextsuche auf Deutsch
+
+- Automation:
+    - Sonarr:
+        icon: sonarr.png
+        href: __URL_SONARR__
+        description: Serien
+        widget:
+          type: sonarr
+          url: http://sonarr:8989
+          key: "{{HOMEPAGE_VAR_SONARR_KEY}}"
+          enableQueue: true
+
+    - Radarr:
+        icon: radarr.png
+        href: __URL_RADARR__
+        description: Filme
+        widget:
+          type: radarr
+          url: http://radarr:7878
+          key: "{{HOMEPAGE_VAR_RADARR_KEY}}"
+          enableQueue: true
+
+    - Lidarr:
+        icon: lidarr.png
+        href: __URL_LIDARR__
+        description: Musik-Wunschzettel
+        widget:
+          type: lidarr
+          url: http://lidarr:8686
+          key: "{{HOMEPAGE_VAR_LIDARR_KEY}}"
+
+    - Prowlarr:
+        icon: prowlarr.png
+        href: __URL_PROWLARR__
+        description: Suchquellen
+        widget:
+          type: prowlarr
+          url: http://prowlarr:9696
+          key: "{{HOMEPAGE_VAR_PROWLARR_KEY}}"
+
+    - Bazarr:
+        icon: bazarr.png
+        href: __URL_BAZARR__
+        description: Untertitel, Deutsch vor Englisch
+        widget:
+          type: bazarr
+          url: http://bazarr:6767
+          key: "{{HOMEPAGE_VAR_BAZARR_KEY}}"
+
+- Downloads:
+    - qBittorrent:
+        icon: qbittorrent.png
+        href: __URL_QBITTORRENT__
+        description: Torrents, durch das VPN
+        widget:
+          type: qbittorrent
+          # Laeuft im Netz von gluetun, deshalb gluetun als Host.
+          url: http://gluetun:8080
+          username: "{{HOMEPAGE_VAR_QBIT_USER}}"
+          password: "{{HOMEPAGE_VAR_QBIT_PASS}}"
+
+    - SABnzbd:
+        icon: sabnzbd.png
+        href: __URL_SABNZBD__
+        description: Usenet
+        widget:
+          type: sabnzbd
+          url: http://sabnzbd:8080
+          key: "{{HOMEPAGE_VAR_SABNZBD_KEY}}"
+
+- Betrieb:
+    - Uptime Kuma:
+        icon: uptime-kuma.png
+        href: __URL_UPTIME__
+        description: Laeuft alles?
+
+    - Scrutiny:
+        icon: scrutiny.png
+        href: __URL_SCRUTINY__
+        description: Festplattengesundheit
+
+    - Cleanuparr:
+        icon: mdi-broom
+        href: __URL_CLEANUPARR__
+        description: Haengende Downloads aufraeumen
+
+    - Tautulli:
+        icon: tautulli.png
+        href: __URL_TAUTULLI__
+        description: Wer schaut was

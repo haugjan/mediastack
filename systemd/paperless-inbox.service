@@ -1,0 +1,13 @@
+[Unit]
+Description=Scans aus OneDrive in den Paperless-Eingang holen
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO_DIR@
+Environment=RCLONE_CONFIG=/etc/rclone/rclone.conf
+ExecStart=@REPO_DIR@/scripts/paperless-inbox.sh
+# Netzwerkaussetzer sind normal, deshalb kein Alarm bei Einzelfehlern.
+SuccessExitStatus=0
+TimeoutStartSec=15min

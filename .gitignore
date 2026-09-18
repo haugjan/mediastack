@@ -1,0 +1,21 @@
+# Geheimnisse
+.env
+
+# Laufzeitzustand aller Container. Gehoert ins Backup, nicht nach Git.
+/config/
+
+# Von setup.sh erzeugt, Vorlage ist services.yaml.tmpl
+/homepage/services.yaml
+
+# Protokoll des Installers
+/setup.log
+
+# Recyclarr-Cache
+/recyclarr/cache/
+/recyclarr/logs/
+/recyclarr/repositories/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp

@@ -1,0 +1,303 @@
+name: CI und Release
+
+# Bei jedem Push nach main und bei jedem Pull Request wird geprueft.
+# Bei einem Tag wie v1.0.0 wird zusaetzlich ein Release-Archiv gebaut, das
+# sich ohne git, ohne gh und ohne Anmeldung herunterladen laesst.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # noetig, um das Release anzulegen
+
+jobs:
+  validate:
+    name: Pruefen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell-Syntax
+        run: |
+          for f in setup.sh scripts/*.sh; do
+            bash -n "$f" && echo "OK   $f"
+          done
+
+      - name: ShellCheck
+        run: |
+          # Blockierend nur bei echten Fehlern. Stilhinweise werden
+          # ausgegeben, brechen den Lauf aber nicht ab.
+          echo "--- Vollstaendiger Bericht (nur informativ) ---"
+          shellcheck -S style setup.sh scripts/*.sh || true
+          echo "--- Blockierende Pruefung ---"
+          shellcheck -S error setup.sh scripts/*.sh
+
+      - name: Python
+        run: |
+          python3 -m py_compile scripts/backfill.py
+          echo "OK   scripts/backfill.py"
+          # Das in setup.sh eingebettete Python separat pruefen, bash -n
+          # sieht davon nichts.
+          sed -n "/<<'PY'/,/^PY$/p" setup.sh | sed "/<<'PY'/d;/^PY$/d" > /tmp/embedded.py
+          if [ -s /tmp/embedded.py ]; then
+            python3 -m py_compile /tmp/embedded.py
+            echo "OK   eingebettetes Python in setup.sh"
+          fi
+
+      - name: YAML und JSON
+        run: |
+          python3 - <<'PY'
+          import glob, json, sys, yaml
+          bad = 0
+          files = ["compose.yaml", "recyclarr/recyclarr.yml"] + \
+                  sorted(glob.glob("homepage/*.yaml")) + \
+                  sorted(glob.glob("homepage/*.tmpl"))
+          for f in files:
+              try:
+                  # Recyclarr nutzt den eigenen Tag !env_var, den kennt
+                  # PyYAML nicht. Wir pruefen die Datei daher nur grob.
+                  if f.endswith("recyclarr.yml"):
+                      yaml.SafeLoader.add_constructor(
+                          "!env_var", lambda l, n: l.construct_scalar(n))
+                  yaml.safe_load(open(f, encoding="utf-8"))
+                  print("OK  ", f)
+              except Exception as e:
+                  bad = 1
+                  print("FAIL", f, e)
+          json.load(open("renovate.json", encoding="utf-8"))
+          print("OK   renovate.json")
+          sys.exit(bad)
+          PY
+
+      - name: systemd-Units
+        run: |
+          python3 - <<'PY'
+          import configparser, glob, sys
+          bad = 0
+          for f in sorted(glob.glob("systemd/*")):
+              need = "Timer" if f.endswith(".timer") else "Service"
+              c = configparser.ConfigParser(strict=False, allow_no_value=True,
+                                            interpolation=None)
+              c.read(f, encoding="utf-8")
+              if need in c.sections():
+                  print("OK  ", f)
+              else:
+                  bad = 1
+                  print("FAIL", f, "Sektion", need, "fehlt")
+          sys.exit(bad)
+          PY
+
+      - name: Compose, Minimalbetrieb ohne jeden Zugang
+        run: |
+          sed -e 's/^\([A-Z_]*\)=$/\1=dummy/' \
+              -e 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=/' \
+              .env.example > /tmp/min.env
+          docker compose --env-file /tmp/min.env config -q
+          N=$(docker compose --env-file /tmp/min.env config --services | wc -l)
+          echo "Dienste ohne Profile: $N"
+          # Ohne externe Zugaenge muss ein brauchbarer Server uebrig bleiben.
+          test "$N" -ge 15 || { echo "Zu wenige Kerndienste"; exit 1; }
+          # Und die Profil-Dienste duerfen NICHT dabei sein, sonst laufen sie
+          # ohne Zugangsdaten in eine Neustartschleife.
+          for s in gluetun qbittorrent sabnzbd paperless caddy; do
+            if docker compose --env-file /tmp/min.env config --services | grep -qx "$s"; then
+              echo "FEHLER: $s startet ohne Profil"; exit 1
+            fi
+          done
+          echo "OK   Profile schirmen die optionalen Dienste ab"
+
+      - name: Compose, alle Profile aktiv
+        run: |
+          sed -e 's/^\([A-Z_]*\)=$/\1=dummy/' \
+              -e 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=torrent,usenet,docs,proxy,extras/' \
+              .env.example > /tmp/all.env
+          docker compose --env-file /tmp/all.env config -q
+          echo "Dienste mit allen Profilen: $(docker compose --env-file /tmp/all.env config --services | wc -l)"
+          # Der haeufigste Fehler im ganzen Stack: qBittorrent darf kein
+          # eigenes Netz haben, es muss im Namespace von gluetun laufen.
+          docker compose --env-file /tmp/all.env config --format json \
+            | python3 -c "
+          import json,sys
+          s=json.load(sys.stdin)['services']
+          assert s['qbittorrent'].get('network_mode')=='service:gluetun', 'qbittorrent nicht im gluetun-Namespace'
+          assert not s['qbittorrent'].get('networks'), 'qbittorrent hat ein eigenes Netz'
+          assert s['plex'].get('network_mode')=='host', 'plex nicht im Host-Netz'
+          assert s['caddy'].get('network_mode')=='host', 'caddy nicht im Host-Netz'
+          up=s['gluetun']['environment']['VPN_PORT_FORWARDING_UP_COMMAND']
+          assert '\n' not in up, 'Port-Forwarding-Kommando ist umgebrochen'
+          assert all(v.get('restart') for v in s.values()), 'Dienst ohne restart-Policy'
+          print('OK   Netzwerk- und Restart-Zusicherungen halten')
+          "
+
+      - name: Caddy bauen und Konfiguration pruefen
+        run: |
+          docker build -q -t caddy-test ./caddy
+          docker run --rm \
+            -e BASE_DOMAIN=example.ch -e TAILSCALE_IP=100.100.100.100 \
+            -e ACME_EMAIL=test@example.ch \
+            -e AZURE_SUBSCRIPTION_ID=s -e AZURE_RESOURCE_GROUP_NAME=r \
+            -e AZURE_TENANT_ID=t -e AZURE_CLIENT_ID=c -e AZURE_CLIENT_SECRET=x \
+            -v "$PWD/caddy:/cfg:ro" \
+            caddy-test caddy validate --config /cfg/Caddyfile
+
+      - name: Oeffentlich und privat sind wirklich getrennt
+        run: |
+          # Kernzusicherung der Sicherheitsarchitektur: die privaten Namen
+          # duerfen ausschliesslich auf der Tailscale-Adresse lauschen.
+          docker run --rm \
+            -e BASE_DOMAIN=example.ch -e TAILSCALE_IP=100.100.100.100 \
+            -e ACME_EMAIL=test@example.ch \
+            -e AZURE_SUBSCRIPTION_ID=s -e AZURE_RESOURCE_GROUP_NAME=r \
+            -e AZURE_TENANT_ID=t -e AZURE_CLIENT_ID=c -e AZURE_CLIENT_SECRET=x \
+            -v "$PWD/caddy:/cfg:ro" \
+            caddy-test caddy adapt --config /cfg/Caddyfile 2>/dev/null \
+          | python3 -c "
+          import json, sys
+          srv = json.load(sys.stdin)['apps']['http']['servers']
+          public, private = set(), set()
+          for s in srv.values():
+              hosts = {h for r in s.get('routes', []) for m in r.get('match', [])
+                       for h in m.get('host', [])}
+              bound_to_tailnet = all(l.startswith('100.100.100.100') for l in s['listen'])
+              (private if bound_to_tailnet else public).update(hosts)
+          print('oeffentlich:', sorted(public))
+          print('privat     :', len(private), 'Namen')
+          assert public == {'requests.example.ch'}, f'Unerwartet oeffentlich: {public}'
+          for name in ('paperless', 'music', 'sonarr', 'qbit'):
+              assert f'{name}.example.ch' in private, f'{name} ist nicht privat'
+          print('OK   nur Overseerr ist oeffentlich erreichbar')
+          "
+
+      - name: Dashboard-Vorlage ergibt gueltiges YAML
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys, yaml
+          tmpl = pathlib.Path("homepage/services.yaml.tmpl").read_text(encoding="utf-8")
+          # Beide Zugriffsarten durchspielen: mit Domain und mit IP und Port.
+          for label, repl in (
+              ("mit Domain", lambda n: f"https://{n}.example.ch"),
+              ("mit IP", lambda n: f"http://192.168.1.50:8080"),
+          ):
+              out = re.sub(r"__URL_([A-Z]+)__", lambda m: repl(m.group(1).lower()), tmpl)
+              # Nur die echte Platzhalterform pruefen. Der Kommentarkopf der
+              # Vorlage erwaehnt das Muster selbst und darf stehen bleiben.
+              leftover = re.findall(r"__URL_[A-Z]+__", out)
+              assert not leftover, f"Platzhalter uebrig: {leftover}"
+              doc = yaml.safe_load(out)
+              n = sum(len(items) for g in doc for items in g.values())
+              print(f"OK   {label}: gueltiges YAML, {n} Eintraege")
+          # Jeder Platzhalter in der Vorlage muss von setup.sh gesetzt werden.
+          used = set(re.findall(r"__URL_([A-Z]+)__", tmpl))
+          setup = pathlib.Path("setup.sh").read_text(encoding="utf-8")
+          known = set(re.findall(r"\[(\w+)\]=\d+", setup))
+          missing = {u for u in used if u.lower() not in known}
+          assert not missing, f"setup.sh kennt diese Dienste nicht: {missing}"
+          print(f"OK   alle {len(used)} Platzhalter werden von setup.sh gesetzt")
+          PY
+
+      - name: Keine Geheimnisse im Repo
+        run: |
+          test ! -f .env || { echo ".env darf nicht im Repo liegen"; exit 1; }
+          grep -q '^\.env$' .gitignore || { echo ".env fehlt in .gitignore"; exit 1; }
+          echo "OK   keine .env eingecheckt"
+
+  release:
+    name: Release bauen
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Archiv packen
+        id: pack
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+
+          # git archive nimmt nur versionierte Dateien und beachtet
+          # export-ignore aus .gitattributes. Damit landen weder config/
+          # noch .env noch die CI-Dateien im Archiv.
+          mkdir -p dist/mediastack
+          git archive HEAD | tar -x -C dist/mediastack
+          echo "$VERSION" > dist/mediastack/VERSION
+          git log -1 --format=%H > dist/mediastack/COMMIT
+
+          tar -C dist -czf "mediastack-$VERSION.tar.gz" mediastack
+          # Zusaetzlich unter festem Namen, damit der Download-Link
+          # dauerhaft gleich bleibt.
+          cp "mediastack-$VERSION.tar.gz" mediastack.tar.gz
+          sha256sum mediastack-$VERSION.tar.gz mediastack.tar.gz > SHA256SUMS
+          ls -lh mediastack*.tar.gz
+
+      - name: Archiv gegenpruefen
+        run: |
+          # Das Archiv muss sich auspacken lassen, setup.sh muss ausfuehrbar
+          # sein und compose muss darin funktionieren. Sonst nuetzt das
+          # Release nichts.
+          mkdir -p /tmp/smoke && tar -xzf mediastack.tar.gz -C /tmp/smoke
+          cd /tmp/smoke/mediastack
+          test -x setup.sh || { echo "setup.sh ist nicht ausfuehrbar"; exit 1; }
+          test ! -e .env || { echo "FEHLER: .env im Archiv"; exit 1; }
+          test ! -d config || { echo "FEHLER: config/ im Archiv"; exit 1; }
+          bash -n setup.sh
+          sed 's/^\([A-Z_]*\)=$/\1=dummy/' .env.example > /tmp/s.env
+          docker compose --env-file /tmp/s.env config -q
+          echo "OK   Archiv ist vollstaendig und lauffaehig"
+          echo "Enthaltene Dateien: $(find . -type f | wc -l)"
+
+      - name: Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.pack.outputs.version }}"
+          PREV=$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            CHANGES=$(git log --no-merges --format='- %s' "$PREV..$VERSION")
+            RANGE="Änderungen seit \`$PREV\`"
+          else
+            CHANGES=$(git log --no-merges --format='- %s' -20)
+            RANGE="Erste Veröffentlichung"
+          fi
+
+          cat > notes.md <<EOF
+          ## Installation
+
+          \`\`\`bash
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/mediastack.tar.gz | tar xz
+          cd mediastack
+          sudo ./setup.sh
+          \`\`\`
+
+          Kein git, kein Konto, keine Anmeldung.
+
+          Läuft auf Debian, Ubuntu und Linux Mint. Das Skript fragt nach, was
+          es wissen muss, installiert Fehlendes selbst und ist beliebig oft
+          wiederholbar.
+
+          Ohne einen einzigen externen Zugang laufen bereits 16 Dienste. VPN,
+          Usenet, Dokumentenarchiv und eigene Web-Adressen sind optional und
+          jederzeit mit einem weiteren \`sudo ./setup.sh\` nachrüstbar.
+
+          ### Prüfsummen
+
+          \`\`\`
+          $(cat SHA256SUMS)
+          \`\`\`
+
+          ## $RANGE
+
+          $CHANGES
+          EOF
+
+          gh release create "$VERSION" \
+            --title "Mediastack $VERSION" \
+            --notes-file notes.md \
+            "mediastack-$VERSION.tar.gz" \
+            mediastack.tar.gz \
+            SHA256SUMS

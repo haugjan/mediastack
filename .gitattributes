@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+Caddyfile text eol=lf
+
+# Nicht ins Release-Archiv packen
+/.github       export-ignore
+/.gitattributes export-ignore

@@ -1,0 +1,12 @@
+[Unit]
+Description=config/ des Mediastacks verschluesselt nach OneDrive sichern
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO_DIR@
+Environment=RCLONE_CONFIG=/etc/rclone/rclone.conf
+Environment=KEEP_DAYS=30
+ExecStart=@REPO_DIR@/scripts/backup-config.sh
+TimeoutStartSec=2h

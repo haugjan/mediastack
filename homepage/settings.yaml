@@ -1,0 +1,30 @@
+---
+title: Mediastack
+description: Plex, Musik, Dokumente und Downloads
+
+theme: dark
+color: slate
+headerStyle: clean
+hideVersion: true
+
+# Reihenfolge und Spaltenbreite der Gruppen aus services.yaml.
+layout:
+  Medien:
+    style: row
+    columns: 4
+  Dokumente:
+    style: row
+    columns: 4
+  Automation:
+    style: row
+    columns: 5
+  Downloads:
+    style: row
+    columns: 2
+  Betrieb:
+    style: row
+    columns: 4
+
+quicklaunch:
+  searchDescriptions: true
+  hideInternetSearch: true

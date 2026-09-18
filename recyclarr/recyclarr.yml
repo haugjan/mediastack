@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://schemas.recyclarr.dev/v8/config-schema.json
+################################################################################
+# Deutsche TRaSH-Profile fuer Sonarr und Radarr.
+#
+# Die Template-IDs sind gegen recyclarr/config-templates (master) verifiziert.
+# Eigene Liste jederzeit abrufbar mit:
+#   docker compose run --rm recyclarr list templates sonarr
+#   docker compose run --rm recyclarr list templates radarr
+#
+# Trockenlauf (schreibt nichts):
+#   docker compose run --rm recyclarr sync --preview
+# Anwenden:
+#   docker compose run --rm recyclarr sync
+#
+# Recyclarr unterstuetzt nur Sonarr und Radarr. Lidarr wird nicht bedient,
+# dort bleiben die Profile handkonfiguriert.
+################################################################################
+
+sonarr:
+  main:
+    base_url: http://sonarr:8989
+    api_key: !env_var SONARR_API_KEY
+
+    # Bringt mit: Quality Definitions fuer Serien, das Profil
+    # "[German] HD Bluray + WEB" und alle dazugehoerenden Custom Formats,
+    # inklusive "[Unwanted] Unwanted Formats German" (German LQ,
+    # German Microsized, Line/Mic Dubbed usw. werden abgestraft).
+    include:
+      - template: sonarr-german-hd-bluray-web
+
+      # Alternativen, jeweils nur EINE aktiv lassen:
+      # - template: sonarr-german-uhd-bluray-web   # 2160p statt 1080p
+      # - template: sonarr-german-hd-remux-web     # Remux, deutlich groesser
+      # - template: sonarr-german-anime-hd-bluray-web
+
+radarr:
+  main:
+    base_url: http://radarr:7878
+    api_key: !env_var RADARR_API_KEY
+
+    include:
+      - template: radarr-german-hd-bluray-web
+
+      # Alternativen, jeweils nur EINE aktiv lassen:
+      # - template: radarr-german-uhd-bluray-web
+      # - template: radarr-german-hd-remux-web
+      # - template: radarr-german-anime-hd-bluray-web

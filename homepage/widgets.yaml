@@ -1,0 +1,20 @@
+---
+- resources:
+    cpu: true
+    memory: true
+    # Pfad aus Sicht des Homepage-Containers. Fuer die Mediendaten muesste
+    # ${DATA_ROOT} zusaetzlich in den Container gemountet werden.
+    disk: /
+    cputemp: false
+
+- datetime:
+    text_size: xl
+    format:
+      dateStyle: short
+      timeStyle: short
+      hourCycle: h23
+
+- search:
+    provider: custom
+    url: https://requests.{{HOMEPAGE_VAR_DOMAIN}}/search?query=
+    target: _blank

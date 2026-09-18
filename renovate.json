@@ -1,0 +1,77 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "timezone": "Europe/Zurich",
+  "schedule": ["* 6-9 * * 1"],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 5,
+  "docker": {
+    "pinDigests": true
+  },
+  "packageRules": [
+    {
+      "description": "Die *arr-Apps werden zusammen aktualisiert, sie haengen ohnehin voneinander ab.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "lscr.io/linuxserver/sonarr",
+        "lscr.io/linuxserver/radarr",
+        "lscr.io/linuxserver/prowlarr",
+        "lscr.io/linuxserver/bazarr"
+      ],
+      "groupName": "arr-apps"
+    },
+    {
+      "description": "Lidarr laeuft auf develop wegen Tubifarry. Eigener PR, damit ein Bruch dort nicht die anderen *arr mitreisst.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["lscr.io/linuxserver/lidarr"],
+      "groupName": "lidarr-develop"
+    },
+    {
+      "description": "Plex einzeln, weil Server-Updates die Clients betreffen.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["lscr.io/linuxserver/plex"],
+      "groupName": "plex"
+    },
+    {
+      "description": "Download-Clients und VPN einzeln: ein Fehler hier stoppt die ganze Pipeline.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "qmcgaw/gluetun",
+        "lscr.io/linuxserver/qbittorrent",
+        "lscr.io/linuxserver/sabnzbd"
+      ],
+      "groupName": "download-clients"
+    },
+    {
+      "description": "Paperless und seine Beiwagen gehoeren zusammen aktualisiert.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "ghcr.io/paperless-ngx/paperless-ngx",
+        "gotenberg/gotenberg",
+        "apache/tika"
+      ],
+      "groupName": "paperless"
+    },
+    {
+      "description": "Postgres NIE automatisch auf eine neue Hauptversion. Das braucht einen Dump und ein Reinladen, sonst startet die Datenbank nicht mehr.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Nebensaechliches sammeln, damit nicht jede Woche fuenf PRs aufgehen.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "ghcr.io/gethomepage/homepage",
+        "louislam/uptime-kuma",
+        "ghcr.io/analogj/scrutiny",
+        "deluan/navidrome",
+        "ghcr.io/advplyr/audiobookshelf",
+        "caddy",
+        "redis"
+      ],
+      "groupName": "infra-tools"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Taeglicher Paperless-Export nach OneDrive
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# Holt den Lauf nach, wenn der Rechner zur geplanten Zeit aus war.
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

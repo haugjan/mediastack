@@ -1,0 +1,19 @@
+---
+- Nachschlagen:
+    - TRaSH Guides (German):
+        - abbr: TG
+          href: https://trash-guides.info/Radarr/radarr-setup-quality-profiles-german-en/
+    - Servarr Wiki:
+        - abbr: SW
+          href: https://wiki.servarr.com/
+    - Gluetun Wiki:
+        - abbr: GW
+          href: https://github.com/qdm12/gluetun-wiki
+
+- Konten:
+    - Plex:
+        - abbr: PX
+          href: https://app.plex.tv/desktop
+    - ProtonVPN:
+        - abbr: PV
+          href: https://account.protonvpn.com/downloads
