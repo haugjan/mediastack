@@ -1,11 +1,15 @@
 # yaml-language-server: $schema=https://schemas.recyclarr.dev/v8/config-schema.json
 ################################################################################
-# Deutsche TRaSH-Profile fuer Sonarr und Radarr.
+# Deutsche TRaSH-Profile fuer Sonarr und Radarr (Recyclarr v8).
 #
-# Die Template-IDs sind gegen recyclarr/config-templates (master) verifiziert.
-# Eigene Liste jederzeit abrufbar mit:
-#   docker compose run --rm recyclarr list templates sonarr
-#   docker compose run --rm recyclarr list templates radarr
+# Seit v8 zieht Recyclarr ein ganzes Profil ueber seine trash_id aus dem
+# TRaSH-Guide: Qualitaeten, Custom Formats, Scores und Sprache kommen
+# automatisch mit. Die Werte unten entsprechen den offiziellen Vorlagen
+# sonarr-/radarr-german-hd-bluray-web aus recyclarr/config-templates.
+#
+# Andere Profile (UHD, Remux, Anime) samt trash_id auflisten:
+#   docker compose run --rm recyclarr list quality-profiles sonarr
+#   docker compose run --rm recyclarr list quality-profiles radarr
 #
 # Trockenlauf (schreibt nichts):
 #   docker compose run --rm recyclarr sync --preview
@@ -21,27 +25,35 @@ sonarr:
     base_url: http://sonarr:8989
     api_key: !env_var SONARR_API_KEY
 
-    # Bringt mit: Quality Definitions fuer Serien, das Profil
-    # "[German] HD Bluray + WEB" und alle dazugehoerenden Custom Formats,
-    # inklusive "[Unwanted] Unwanted Formats German" (German LQ,
-    # German Microsized, Line/Mic Dubbed usw. werden abgestraft).
-    include:
-      - template: sonarr-german-hd-bluray-web
+    quality_definition:
+      type: series
 
-      # Alternativen, jeweils nur EINE aktiv lassen:
-      # - template: sonarr-german-uhd-bluray-web   # 2160p statt 1080p
-      # - template: sonarr-german-hd-remux-web     # Remux, deutlich groesser
-      # - template: sonarr-german-anime-hd-bluray-web
+    quality_profiles:
+      - trash_id: dca7e5e9e99c703bcbdaaa471dd40e98  # [German] HD Bluray + WEB
+        reset_unmatched_scores:
+          enabled: true
+
+    # Nicht standardmaessig dabei, von der Vorlage aber empfohlen. Die
+    # Unwanted-Gruppe straft German LQ, German Microsized usw. ab.
+    custom_format_groups:
+      add:
+        - trash_id: 158188097a58d7687dee647e04af0da3  # [Optional] Golden Rule HD
+        - trash_id: 6f0872eebfc95b1f93474b7ac866ced0  # [Unwanted] Unwanted Formats German
 
 radarr:
   main:
     base_url: http://radarr:7878
     api_key: !env_var RADARR_API_KEY
 
-    include:
-      - template: radarr-german-hd-bluray-web
+    quality_definition:
+      type: movie
 
-      # Alternativen, jeweils nur EINE aktiv lassen:
-      # - template: radarr-german-uhd-bluray-web
-      # - template: radarr-german-hd-remux-web
-      # - template: radarr-german-anime-hd-bluray-web
+    quality_profiles:
+      - trash_id: 2b90e905c99490edc7c7a5787443748b  # [German] HD Bluray + WEB
+        reset_unmatched_scores:
+          enabled: true
+
+    custom_format_groups:
+      add:
+        - trash_id: f8bf8eab4617f12dfdbd16303d8da245  # [Optional] Golden Rule HD
+        - trash_id: 0ca61b4b233178d07113082a7acff72d  # [Unwanted] Unwanted Formats German

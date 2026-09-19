@@ -225,7 +225,7 @@ compose.yaml                  27 Dienste, optionale ueber Profile abgesichert
 renovate.json                 Update-Policy, Postgres-Major bewusst gesperrt
 caddy/Dockerfile              Caddy-Build mit dem Azure-DNS-Modul
 caddy/Caddyfile               oeffentlich vs. an tailscale0 gebunden
-recyclarr/recyclarr.yml       deutsche TRaSH-Profile, IDs verifiziert
+recyclarr/recyclarr.yml       deutsche TRaSH-Profile (Recyclarr v8)
 homepage/services.yaml.tmpl   Dashboard-Vorlage, setup.sh setzt die Links
 systemd/                      Timer fuer OneDrive und Sicherung
 scripts/update.sh             neue Version holen, ohne git und ohne gh

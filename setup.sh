@@ -595,7 +595,7 @@ azure_dns_setup() {
 	# ------------------------------------------------------ Gegenprobe
 	local got
 	got="$(az network dns record-set a show -g "$AZ_RG" -z "$BASE_DOMAIN" -n "*" \
-		--subscription "$AZ_SUB" --query "aRecords[0].ipv4Address" -o tsv \
+		--subscription "$AZ_SUB" --query "(ARecords || aRecords)[0].ipv4Address" -o tsv \
 		--only-show-errors 2>/dev/null)"
 	if [[ $got == "$TS_IP" ]]; then
 		ok "Azure bestaetigt: *.${BASE_DOMAIN} -> $got"
