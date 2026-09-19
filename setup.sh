@@ -917,6 +917,46 @@ else
 	note "Noch keine Schluessel gefunden. Einfach spaeter nochmal: sudo ./setup.sh"
 fi
 
+# --- Stammordner eintragen
+# Ohne Stammordner lehnen Sonarr, Radarr und Lidarr jede Anfrage ab
+# ("'Root Folder Path' must not be empty"), und auch Overseerr kann dann
+# nichts weiterreichen. Die Pfade sind die IM Container, dort haengt
+# DATA_ROOT unter /data.
+arr_api() {
+	local port="$1" api="$2" key="$3" path="$4"; shift 4
+	curl -fsS --max-time 15 -H "X-Api-Key: $key" "$@" \
+		"http://localhost:$port/api/$api/$path" 2>>"$LOG"
+}
+add_root() {
+	local app="$1" port="$2" api="$3" dir="$4" key body q m
+	key="$(env_get "${app^^}_API_KEY" 2>/dev/null || true)"
+	[[ -n $key ]] || return 1
+	# Schon eingetragen? Dann nichts aendern.
+	arr_api "$port" "$api" "$key" rootfolder | grep -q '"path"' && return 0
+	body="{\"path\":\"$dir\"}"
+	if [[ $app == lidarr ]]; then
+		# Lidarr will zusaetzlich einen Namen und zwei Profile.
+		q="$(arr_api "$port" "$api" "$key" qualityprofile | python3 -c \
+			'import json,sys; d=json.load(sys.stdin); print(d[0]["id"] if d else "")' 2>>"$LOG")"
+		m="$(arr_api "$port" "$api" "$key" metadataprofile | python3 -c \
+			'import json,sys; d=json.load(sys.stdin); print(d[0]["id"] if d else "")' 2>>"$LOG")"
+		[[ -n $q && -n $m ]] || return 1
+		body="{\"name\":\"Musik\",\"path\":\"$dir\",\"defaultQualityProfileId\":$q,\"defaultMetadataProfileId\":$m,\"defaultMonitorOption\":\"all\",\"defaultNewItemMonitorOption\":\"all\",\"defaultTags\":[]}"
+	fi
+	arr_api "$port" "$api" "$key" rootfolder -X POST \
+		-H 'Content-Type: application/json' -d "$body" >>"$LOG" 2>&1
+}
+ROOTS=0
+add_root sonarr 8989 v3 /data/media/tv     && ROOTS=$((ROOTS+1))
+add_root radarr 7878 v3 /data/media/movies && ROOTS=$((ROOTS+1))
+add_root lidarr 8686 v1 /data/media/music  && ROOTS=$((ROOTS+1))
+if (( ROOTS == 3 )); then
+	ok "Stammordner in Sonarr, Radarr und Lidarr stehen"
+else
+	note "Stammordner nicht ueberall gesetzt. In der App unter Einstellungen,"
+	info "Medienverwaltung nachtragen: /data/media/tv, /movies, /music."
+fi
+
 # --- Tautulli: API freigeben
 # Der Einrichtungsassistent von Tautulli schaltet die API aus. Ohne sie
 # bleibt die Plex-Kachel auf der Startseite bei "API not enabled". Die
