@@ -93,6 +93,29 @@ ask_secret() {
 	echo "$a"
 }
 
+# Numerierte Auswahl. Liefert den gewaehlten Index (ab 1) auf stdout.
+# Bei nur einem Eintrag wird er ohne Rueckfrage genommen.
+ask_choice() {
+	local prompt="$1"; shift
+	local -a items=("$@")
+	local i sel
+	if (( ${#items[@]} == 1 )); then
+		printf '    nur eine Moeglichkeit: %s\n' "${items[0]}" >&2
+		echo 1; return 0
+	fi
+	for ((i = 0; i < ${#items[@]}; i++)); do
+		printf '    %2d) %s\n' "$((i + 1))" "${items[i]}" >&2
+	done
+	while :; do
+		printf '  %s [1-%d]: ' "$prompt" "${#items[@]}" >&2
+		read -r sel </dev/tty || sel=""
+		if [[ $sel =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= ${#items[@]} )); then
+			echo "$sel"; return 0
+		fi
+		printf '    Bitte eine Zahl zwischen 1 und %d.\n' "${#items[@]}" >&2
+	done
+}
+
 # ------------------------------------------------------------- .env-Zugriff
 env_get() {
 	[[ -f $REPO_DIR/.env ]] || return 1
@@ -361,36 +384,208 @@ LAN_SUBNET="$(ip -o -4 route show to default | awk '{print $3}' | head -1 | sed 
 ok "Lokale Adresse: ${LAN_IP:-unbekannt}"
 
 # =========================================================================
-# 5. Eigene Adressen
+# 5. Eigene Web-Adressen, vollautomatisch ueber Azure DNS
 # =========================================================================
 step "5/9  Eigene Web-Adressen (optional)"
 
 USE_PROXY=0
 BASE_DOMAIN="$(env_get BASE_DOMAIN 2>/dev/null || true)"
+
+# Setzt einen A-Eintrag idempotent: erst loeschen, dann neu anlegen. Ein
+# blosses add-record wuerde bei einem bestehenden Eintrag eine zweite
+# Adresse daneben schreiben, und dann antwortet die Zone abwechselnd.
+dns_set_a() {
+	local name="$1" ip="$2"
+	az network dns record-set a delete -g "$AZ_RG" -z "$BASE_DOMAIN" -n "$name" \
+		--subscription "$AZ_SUB" -y --only-show-errors >>"$LOG" 2>&1 || true
+	az network dns record-set a add-record -g "$AZ_RG" -z "$BASE_DOMAIN" -n "$name" \
+		-a "$ip" --ttl 300 --subscription "$AZ_SUB" --only-show-errors >>"$LOG" 2>&1
+}
+
+azure_dns_setup() {
+	# ---------------------------------------------------------- Azure CLI
+	if ! command -v az >/dev/null 2>&1; then
+		info "Azure CLI fehlt"
+		ask_yn "Azure CLI jetzt installieren? (Download ca. 100 MB)" j || return 1
+		curl -sSL https://aka.ms/InstallAzureCLIDeb | bash >>"$LOG" 2>&1 \
+			|| { problem "Azure CLI liess sich nicht installieren, siehe setup.log"; return 1; }
+		ok "Azure CLI installiert"
+	fi
+
+	# ---------------------------------------------------------- Anmeldung
+	# Bewusst NICHT ins Log umgeleitet: du musst Link und Code sehen.
+	# Geraetecode statt Browser, damit es auch per SSH funktioniert.
+	if ! az account show >/dev/null 2>&1; then
+		echo
+		echo "  Es erscheinen jetzt ein Link und ein Code. Link im Browser oeffnen,"
+		echo "  Code eingeben, mit dem Konto anmelden, dem die DNS-Zone gehoert."
+		echo
+		az login --use-device-code --only-show-errors \
+			|| { problem "Azure-Anmeldung abgebrochen"; return 1; }
+	fi
+	local who
+	who="$(az account show --query user.name -o tsv 2>/dev/null)"
+	ok "angemeldet als ${who:-unbekannt}"
+
+	# ------------------------------------------------------- Subscription
+	local -a sub_names sub_ids
+	mapfile -t sub_names < <(az account list --query "[?state=='Enabled'].name" -o tsv 2>/dev/null)
+	mapfile -t sub_ids   < <(az account list --query "[?state=='Enabled'].id"   -o tsv 2>/dev/null)
+	(( ${#sub_ids[@]} )) || { problem "Keine nutzbare Azure-Subscription sichtbar"; return 1; }
+	local sidx
+	echo "  Subscriptions:"
+	sidx="$(ask_choice "Welche?" "${sub_names[@]}")"
+	AZ_SUB="${sub_ids[$((sidx - 1))]}"
+	ok "Subscription: ${sub_names[$((sidx - 1))]}"
+
+	# ---------------------------------------------------------- DNS-Zonen
+	local -a z_names z_rgs z_labels=()
+	mapfile -t z_names < <(az network dns zone list --subscription "$AZ_SUB" \
+		--query "[].name" -o tsv 2>/dev/null)
+	mapfile -t z_rgs   < <(az network dns zone list --subscription "$AZ_SUB" \
+		--query "[].resourceGroup" -o tsv 2>/dev/null)
+	if ! (( ${#z_names[@]} )); then
+		note "In dieser Subscription liegt keine DNS-Zone."
+		info "Eine Zone anzulegen heisst auch, beim Registrar die Nameserver"
+		info "umzustellen und auf die Uebernahme zu warten. Das automatisiere"
+		info "ich bewusst nicht, dabei kann man sich die Domain abschiessen."
+		return 1
+	fi
+	local i
+	for ((i = 0; i < ${#z_names[@]}; i++)); do
+		z_labels+=("${z_names[i]}   (Resource Group: ${z_rgs[i]})")
+	done
+	echo "  Gefundene DNS-Zonen:"
+	local zidx; zidx="$(ask_choice "Welche Domain willst du nutzen?" "${z_labels[@]}")"
+	BASE_DOMAIN="${z_names[$((zidx - 1))]}"
+	AZ_RG="${z_rgs[$((zidx - 1))]}"
+	ok "Domain: $BASE_DOMAIN"
+
+	# ------------------------------------------------- Service Principal
+	# Caddy braucht Schreibrecht in der Zone, um fuer die DNS-01-Challenge
+	# einen TXT-Eintrag zu setzen. Der Umfang ist genau diese eine Zone.
+	local scope sp_name appid secret tenant out
+	scope="/subscriptions/${AZ_SUB}/resourceGroups/${AZ_RG}/providers/Microsoft.Network/dnszones/${BASE_DOMAIN}"
+	sp_name="caddy-${BASE_DOMAIN//./-}-dns"
+	tenant="$(az account show --query tenantId -o tsv 2>/dev/null)"
+	appid="$(az ad sp list --display-name "$sp_name" --query "[0].appId" -o tsv \
+		--only-show-errors 2>/dev/null)"
+
+	if [[ -n $appid ]]; then
+		info "Zugang '$sp_name' existiert bereits"
+		secret="$(env_get AZURE_CLIENT_SECRET 2>/dev/null || true)"
+		if [[ -z $secret ]] || ask_yn "Neues Passwort erzeugen? (das alte wird ungueltig)" n; then
+			secret="$(az ad app credential reset --id "$appid" --query password -o tsv \
+				--only-show-errors 2>>"$LOG")" \
+				|| { problem "Neues Passwort konnte nicht erzeugt werden"; return 1; }
+			ok "neues Passwort erzeugt"
+		else
+			info "bestehendes Passwort aus der .env wird weiterverwendet"
+		fi
+	else
+		info "Lege einen Zugang an, der NUR in dieser Zone schreiben darf"
+		out="$(az ad sp create-for-rbac --name "$sp_name" \
+			--role "DNS Zone Contributor" --scopes "$scope" \
+			-o json --only-show-errors 2>>"$LOG")" || {
+			problem "Zugang konnte nicht angelegt werden."
+			info "In Firmen-Tenants ist das Anlegen von App-Registrierungen oft"
+			info "gesperrt, und die Rollenzuweisung braucht Owner-Recht auf der"
+			info "Zone. Details in setup.log. Von Hand geht es nach"
+			info "docs/07-azure-dns.md, dann die AZURE_*-Werte in die .env."
+			return 1; }
+		appid="$(printf '%s' "$out" | python3 -c "import json,sys; print(json.load(sys.stdin)['appId'])")"
+		secret="$(printf '%s' "$out" | python3 -c "import json,sys; print(json.load(sys.stdin)['password'])")"
+	fi
+	[[ -n $appid && -n $secret && -n $tenant ]] \
+		|| { problem "Azure-Zugangsdaten unvollstaendig"; return 1; }
+	ok "Zugang bereit (Client-ID ${appid:0:8}...)"
+
+	# --------------------------------------------------------- Adressen
+	[[ -n $TS_IP ]] || { problem "Ohne Tailscale-Adresse kann ich die privaten Namen nicht setzen"; return 1; }
+	local pub
+	pub="$(curl -fsS --max-time 10 https://ipinfo.io/ip 2>/dev/null | tr -d '[:space:]')"
+	echo
+	echo "  Ich setze zwei Arten von Eintraegen:"
+	printf '    *.%-28s -> %s   (nur ueber Tailscale)\n' "$BASE_DOMAIN" "$TS_IP"
+	printf '    requests.%-21s -> %s   (oeffentlich)\n' "$BASE_DOMAIN" "${pub:-unbekannt}"
+	echo
+	echo "  Ein genauer Eintrag schlaegt im DNS immer den Platzhalter. Deshalb"
+	echo "  ist 'requests' die einzige Ausnahme, alles andere bleibt privat."
+	echo
+
+	dns_set_a "*" "$TS_IP" \
+		&& ok "*.${BASE_DOMAIN} zeigt auf $TS_IP" \
+		|| { problem "Platzhalter-Eintrag fehlgeschlagen, siehe setup.log"; return 1; }
+
+	if [[ -n $pub ]]; then
+		if ask_yn "requests.${BASE_DOMAIN} oeffentlich anlegen? (damit Familie und Freunde Wuensche eintragen koennen)" j; then
+			if dns_set_a "requests" "$pub"; then
+				ok "requests.${BASE_DOMAIN} zeigt auf $pub"
+				note "Am Router muessen 80 und 443 auf diesen Rechner zeigen, sonst nichts."
+				note "Wechselt deine Internet-Adresse, zeigt der Eintrag ins Leere."
+				note "Dauerhafte Loesung: CNAME auf einen DynDNS-Namen, docs/07-azure-dns.md."
+			else
+				problem "requests-Eintrag fehlgeschlagen"
+			fi
+		else
+			info "Kein oeffentlicher Eintrag. Dann ist auch Overseerr nur im Tailnet."
+		fi
+	else
+		note "Oeffentliche Adresse nicht ermittelbar, 'requests' wurde nicht gesetzt."
+	fi
+
+	# -------------------------------------------------------- Speichern
+	env_set BASE_DOMAIN "$BASE_DOMAIN"
+	env_set PAPERLESS_DOMAIN "paperless.${BASE_DOMAIN}"
+	env_set AZURE_SUBSCRIPTION_ID "$AZ_SUB"
+	env_set AZURE_RESOURCE_GROUP_NAME "$AZ_RG"
+	env_set AZURE_TENANT_ID "$tenant"
+	env_set AZURE_CLIENT_ID "$appid"
+	env_set AZURE_CLIENT_SECRET "$secret"
+	env_ask_if_empty ACME_EMAIL "E-Mail fuer die Zertifikate (Let's Encrypt)"
+	ok "Zugangsdaten in der .env gespeichert"
+
+	# ------------------------------------------------------ Gegenprobe
+	local got
+	got="$(az network dns record-set a show -g "$AZ_RG" -z "$BASE_DOMAIN" -n "*" \
+		--subscription "$AZ_SUB" --query "aRecords[0].ipv4Address" -o tsv \
+		--only-show-errors 2>/dev/null)"
+	if [[ $got == "$TS_IP" ]]; then
+		ok "Azure bestaetigt: *.${BASE_DOMAIN} -> $got"
+	else
+		note "Azure meldet '${got:-nichts}', erwartet war $TS_IP. Bitte pruefen."
+	fi
+	info "Die Azure-Anmeldung wird ab jetzt nicht mehr gebraucht."
+	info "Abmelden kannst du mit:  az logout"
+	return 0
+}
+
 if [[ -n $(env_get AZURE_CLIENT_SECRET 2>/dev/null || true) && -n $BASE_DOMAIN ]]; then
 	USE_PROXY=1
 	ok "Schon eingerichtet fuer $BASE_DOMAIN"
+	if ask_yn "DNS-Eintraege neu setzen? (etwa weil sich deine Internet-Adresse geaendert hat)" n; then
+		azure_dns_setup || note "Nicht geaendert, die bisherigen Werte bleiben."
+	fi
 else
-	echo "  Ohne das erreichst du alles ueber Adressen wie http://$LAN_IP:8989."
-	echo "  Das funktioniert einwandfrei, sieht nur nicht schoen aus."
-	echo "  Mit eigener Domain bei Azure DNS: https://sonarr.deine-domain.ch"
-	if ask_yn "Eigene Domain einrichten? (braucht eine Domain bei Azure DNS)" n; then
-		BASE_DOMAIN="$(ask "Domain" "${BASE_DOMAIN:-}")"
-		if [[ -n $BASE_DOMAIN ]]; then
-			env_set BASE_DOMAIN "$BASE_DOMAIN"
-			env_set PAPERLESS_DOMAIN "paperless.$BASE_DOMAIN"
-			echo "  Die Azure-Zugangsdaten stehen in docs/07-azure-dns.md."
-			env_ask_if_empty ACME_EMAIL "E-Mail fuer die Zertifikate"
-			env_ask_if_empty AZURE_SUBSCRIPTION_ID "Azure Subscription-ID"
-			env_ask_if_empty AZURE_RESOURCE_GROUP_NAME "Azure Resource Group"
-			env_ask_if_empty AZURE_TENANT_ID "Azure Tenant-ID"
-			env_ask_if_empty AZURE_CLIENT_ID "Azure Client-ID"
-			env_ask_if_empty AZURE_CLIENT_SECRET "Azure Client-Secret" 1
-			if [[ -n $(env_get AZURE_CLIENT_SECRET) && -n $TS_IP ]]; then
-				USE_PROXY=1; ok "Adressen werden eingerichtet"
-			else
-				note "Unvollstaendig oder Tailscale fehlt, wird uebersprungen"
-			fi
+	echo "  Ohne diesen Schritt erreichst du alles unter http://$LAN_IP:8989 und"
+	echo "  aehnlich. Das funktioniert einwandfrei, sieht nur nicht schoen aus."
+	echo
+	echo "  Mit eigener Domain bekommst du https://paperless.deine-domain.ch mit"
+	echo "  echtem, browservertrautem Zertifikat, und trotzdem ist nichts davon"
+	echo "  aus dem Internet erreichbar: die Namen zeigen auf deine private"
+	echo "  Tailscale-Adresse. Ich richte Zone, Zugang und Eintraege selbst ein."
+	echo "  Voraussetzung ist eine Domain, deren DNS-Zone bei Azure liegt."
+	echo
+	if [[ -z $TS_IP ]]; then
+		note "Tailscale ist nicht verbunden, und das ist hierfuer Voraussetzung."
+		info "Spaeter: sudo tailscale up --ssh, dann sudo ./setup.sh erneut."
+	elif ask_yn "Domain jetzt automatisch einrichten?" n; then
+		if azure_dns_setup; then
+			USE_PROXY=1
+			ok "Adressen eingerichtet"
+		else
+			note "Uebersprungen. Der Stack laeuft trotzdem, ueber IP und Portnummer."
+			BASE_DOMAIN=""
 		fi
 	else
 		info "Uebersprungen. Du nutzt Adressen mit IP und Portnummer."

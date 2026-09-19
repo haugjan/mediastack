@@ -47,7 +47,7 @@ nötig sind.
 | 2 | Speicherort wählen, freien Platz und **Hardlink-Fähigkeit** prüfen |
 | 3 | Dienstbenutzer und Ordnerstruktur anlegen |
 | 4 | Tailscale für den Zugriff von unterwegs (optional) |
-| 5 | Eigene Web-Adressen über Azure DNS (optional) |
+| 5 | Eigene Web-Adressen: Azure-Anmeldung, Zone auswählen, Zugang und DNS-Einträge **automatisch** (optional) |
 | 6 | Torrents über ProtonVPN und Usenet (beide optional) |
 | 7 | Paperless-Dokumentenarchiv (optional) |
 | 8 | Plex mit deinem Konto verbinden |
@@ -114,6 +114,10 @@ hätte nicht genügt, weil jemand mit Kenntnis deiner Heim-IP sonst einfach
 
 Ohne Domain erreichst du alles über `http://<ip>:<port>`. Funktioniert
 genauso, sieht nur weniger schön aus.
+
+Vom Handy erreichst du das alles über die Tailscale-App, ohne dass ein Port
+offen ist. Wie das eingerichtet wird, welche Apps sich lohnen und der eine
+DNS-Fallstrick dabei: [docs/09](docs/09-handy-und-unterwegs.md).
 
 Deine Domain steht **nirgends in diesem Repo**, sondern ausschließlich in
 deiner lokalen `.env` unter `BASE_DOMAIN`, und die ist von Git ausgeschlossen.
@@ -231,8 +235,9 @@ docs/03-deutsche-profile.md   Sprachlogik, Delay Profiles, Quellenaufteilung
 docs/04-hardware.md           Hardware-Empfehlung, warum kein Raspberry Pi
 docs/05-buecher.md            Readarr-Nachfolge, Audiobookshelf
 docs/06-paperless-onedrive.md rclone, die zwei Einbahnstrassen, Restore
-docs/07-azure-dns.md          Service Principal, Records, Zertifikate, Test
+docs/07-azure-dns.md          was setup.sh bei Azure macht, und wie von Hand
 docs/08-musik.md              Navidrome, Client fuers Auto, Tubifarry
+docs/09-handy-und-unterwegs.md Zugriff per Tailscale, Apps, DNS-Fallstrick
 config/                       Laufzeitzustand, nicht in Git, gehoert ins Backup
 ```
 

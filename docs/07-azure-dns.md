@@ -12,6 +12,46 @@ geht: **echte, browservertraute Zertifikate für Dienste, die aus dem Internet
 > Prüfen, ob deine Zone überhaupt bei Azure liegt:
 > `nslookup -type=NS example.com` muss `*.azure-dns.*` zurückgeben.
 
+## Das macht `setup.sh` selbst
+
+Seit Schritt 5 des Installers ist nichts davon Handarbeit:
+
+```
+sudo ./setup.sh
+  5/9  Eigene Web-Adressen (optional)
+       Domain jetzt automatisch einrichten? (j/n) [n]: j
+       · Azure CLI fehlt
+       ✓ Azure CLI installiert
+         Es erscheinen jetzt ein Link und ein Code...
+       ✓ angemeldet als du@example.com
+         Subscriptions:
+          1) Visual Studio Professional
+          2) Pay-As-You-Go
+         Welche? [1-2]: 2
+         Gefundene DNS-Zonen:
+          1) example.com      (Resource Group: dns-rg)
+          2) andere.ch        (Resource Group: web)
+         Welche Domain willst du nutzen? [1-2]: 1
+       ✓ Domain: example.com
+       · Lege einen Zugang an, der NUR in dieser Zone schreiben darf
+       ✓ Zugang bereit (Client-ID 3f7a1c02...)
+       ✓ *.example.com zeigt auf 100.92.14.7
+       ✓ requests.example.com zeigt auf 84.75.x.x
+       ✓ Zugangsdaten in der .env gespeichert
+       ✓ Azure bestaetigt: *.example.com -> 100.92.14.7
+```
+
+Die Anmeldung läuft über einen Gerätecode, funktioniert also auch per SSH ohne
+Browser auf dem Server. Danach brauchst du die Azure-Anmeldung nicht mehr und
+kannst sie mit `az logout` beenden; Caddy nutzt ab dann nur noch den
+angelegten Zugang.
+
+Der Rest dieses Dokuments erklärt, **was** dabei passiert und wie du es von
+Hand machst, falls die Automatik scheitert. Das kommt vor: in Firmen-Tenants
+ist das Anlegen von App-Registrierungen häufig gesperrt, und die
+Rollenzuweisung braucht Owner-Recht auf der Zone. Dann meldet der Installer
+das und läuft ohne eigene Adressen weiter.
+
 ## Warum DNS-01 und nicht der übliche Weg
 
 Der normale Weg zu einem Let's-Encrypt-Zertifikat ist die HTTP-01-Challenge:
@@ -44,7 +84,7 @@ die Quell-IP durch den `docker-proxy` verloren geht und dann alles wie
 internes LAN aussieht. Das würde im Zweifel offen statt geschlossen
 scheitern, und genau das darf bei Dokumenten nicht passieren.
 
-## Schritt 1: Service Principal anlegen
+## Von Hand, Schritt 1: Service Principal anlegen
 
 Er darf genau eines: Records in dieser einen Zone ändern. Kein Zugriff auf
 die Subscription, keine anderen Ressourcen.
@@ -76,7 +116,7 @@ Die Ausgabe liefert `appId`, `password` und `tenant`. Diese Zuordnung in die
 
 Das `password` wird genau einmal angezeigt. Gleich in den Passwortmanager.
 
-## Schritt 2: DNS-Records setzen
+## Von Hand, Schritt 2: DNS-Records setzen
 
 Zwei Records, und die Reihenfolge der Spezifität erledigt den Rest: ein
 expliziter Record schlägt im DNS immer den Wildcard.
@@ -101,7 +141,7 @@ dig +short paperless.example.com    # -> 100.x.y.z
 dig +short requests.example.com     # -> deine oeffentliche IP
 ```
 
-## Schritt 3: Wechselnde Heim-IP
+## Schritt 3: Wechselnde Heim-IP (betrifft auch die Automatik)
 
 Die meisten Schweizer Anschlüsse haben keine feste IPv4. Dann zeigt
 `requests.example.com` irgendwann ins Leere. Zwei Wege:
