@@ -837,8 +837,19 @@ if (( USE_TORRENT )); then
 	printf '     "Bypass authentication for clients on localhost" EINSCHALTEN.\n'
 	printf '     Ohne die bekommst du keinen Port und kannst nichts weitergeben.\n'
 fi
-printf '  %d. In Plex unter Einstellungen, Transcoder die hardwarebeschleunigte\n' $((n++))
-printf '     Kodierung anhaken. Sonst rechnet Plex unnoetig per CPU.\n'
+if (( HAVE_GPU )); then
+	printf '  %d. In Plex unter Einstellungen, Transcoder die hardwarebeschleunigte\n' $((n++))
+	printf '     Kodierung anhaken. Das Haekchen ist NICHT automatisch gesetzt,\n'
+	printf '     obwohl die Grafikeinheit durchgereicht ist. Ohne es rechnet Plex\n'
+	printf '     unnoetig per CPU, und das ist die haeufigste Ursache fuer 100%%\n'
+	printf '     Auslastung bei einem einzigen Zuschauer.\n'
+else
+	printf '  %d. Dieser Rechner hat keine nutzbare Grafikeinheit fuers Umrechnen.\n' $((n++))
+	printf '     Plex rechnet dann per CPU, was fuer Apple TV oder Shield reicht,\n'
+	printf '     weil die alles direkt abspielen. Smart-TV-Apps und Browser lösen\n'
+	printf '     aber Umrechnen aus, und dafuer wird es zu langsam.\n'
+	printf '     Siehe docs/04-hardware.md.\n'
+fi
 printf '  %d. Qualitaetsprofile schreiben:  docker compose run --rm recyclarr sync\n' $((n++))
 (( ! USE_TORRENT )) && printf '  %d. Torrents spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
 (( ! USE_DOCS ))    && printf '  %d. Paperless spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
