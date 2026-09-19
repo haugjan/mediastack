@@ -185,7 +185,11 @@ Updates der Container kommen als Renovate-Pull-Request. Nach dem Merge:
 git pull && docker compose up -d
 ```
 
-Den Stack selbst aktualisierst du so, ohne git:
+Den Stack selbst aktualisiert `sudo ./setup.sh` automatisch: bevor es
+irgendetwas tut, schaut es nach einem neueren Release, spielt es ein und
+startet sich in der neuen Version neu. Ist GitHub nicht erreichbar, läuft es
+mit der vorhandenen Version weiter. In einem Git-Checkout wird nichts
+überschrieben, dort gilt `git pull`. Nur aktualisieren, ohne Setup:
 
 ```bash
 ./scripts/update.sh

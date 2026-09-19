@@ -173,6 +173,30 @@ EOF
 ADMIN_USER="${SUDO_USER:-root}"
 command -v python3 >/dev/null || { apt-get update -qq; apt-get install -y -qq python3; }
 
+# Vor allem anderen: gibt es ein neueres Release? Dann erst aktualisieren
+# und gleich das neue setup.sh starten. Der { }-Block ist Absicht: bash
+# liest ein Skript stueckweise, und diese Datei wird dabei ueberschrieben.
+# Den Block liest bash vollstaendig, bevor er laeuft, und danach wird
+# nichts mehr aus der alten Datei gelesen, weil exec sie ersetzt.
+# Ein Git-Checkout bleibt unberuehrt, dort gilt git pull.
+{
+if [[ -n ${MEDIASTACK_UPDATED:-} ]]; then
+	:
+elif [[ -d $REPO_DIR/.git ]]; then
+	info "Git-Checkout, keine Release-Pruefung (neuester Stand: git pull)"
+else
+	info "Suche nach einer neueren Version..."
+	bash "$REPO_DIR/scripts/update.sh" --from-setup
+	case $? in
+		0) info "Starte die neue Version"
+		   MEDIASTACK_UPDATED=1 exec bash "$REPO_DIR/setup.sh" "$@" ;;
+		2) ;;
+		3) stop "Aktualisierung unvollstaendig. Bitte sudo ./setup.sh erneut starten." ;;
+		*) note "Keine Pruefung moeglich, es geht mit dieser Version weiter." ;;
+	esac
+fi
+}
+
 FIRST_RUN=1
 [[ -f $REPO_DIR/.env ]] && FIRST_RUN=0
 if (( FIRST_RUN )); then
@@ -402,72 +426,89 @@ dns_set_a() {
 		-a "$ip" --ttl 300 --subscription "$AZ_SUB" --only-show-errors >>"$LOG" 2>&1
 }
 
+# Anmeldung per Geraetecode, damit es auch per SSH ohne Browser geht.
+# Bewusst NICHT ins Log umgeleitet: du musst Link und Code sehen.
+# Die neuere az-Anmeldung fragt danach selbst nach Tenant und Subscription.
+# Das schalten wir ab, gesucht wird ohnehin in allen Subscriptions.
+azure_login() {
+	echo
+	echo "  Es erscheinen jetzt ein Link und ein Code. Link im Browser oeffnen,"
+	echo "  Code eingeben, mit dem Konto anmelden, dem die DNS-Zone gehoert."
+	echo
+	AZURE_CORE_LOGIN_EXPERIENCE_V2=off az login --use-device-code --only-show-errors \
+		>>"$LOG" || { problem "Azure-Anmeldung abgebrochen"; return 1; }
+}
+
+# Sucht in ALLEN Subscriptions aller Tenants, die das Konto sieht, nach
+# DNS-Zonen. So muss niemand wissen, wo die Zone liegt.
+azure_find_zones() {
+	Z_NAMES=(); Z_RGS=(); Z_SUBS=(); Z_TENANTS=(); Z_LABELS=()
+	local sub_id tenant sub_name zname zrg
+	while IFS=$'\t' read -r sub_id tenant sub_name; do
+		[[ -n $sub_id ]] || continue
+		while IFS=$'\t' read -r zname zrg; do
+			[[ -n $zname ]] || continue
+			Z_NAMES+=("$zname"); Z_RGS+=("$zrg")
+			Z_SUBS+=("$sub_id"); Z_TENANTS+=("$tenant")
+			Z_LABELS+=("$(printf '%-24s (%s, Resource Group %s)' "$zname" "$sub_name" "$zrg")")
+		done < <(az network dns zone list --subscription "$sub_id" \
+			--query "[].[name, resourceGroup]" -o tsv --only-show-errors 2>>"$LOG")
+	done < <(az account list --query "[?state=='Enabled'].[id, tenantId, name]" \
+		-o tsv --only-show-errors 2>>"$LOG")
+}
+
 azure_dns_setup() {
 	# ---------------------------------------------------------- Azure CLI
 	if ! command -v az >/dev/null 2>&1; then
-		info "Azure CLI fehlt"
-		ask_yn "Azure CLI jetzt installieren? (Download ca. 100 MB)" j || return 1
+		info "Azure CLI fehlt, wird installiert (Download ca. 100 MB)"
 		curl -sSL https://aka.ms/InstallAzureCLIDeb | bash >>"$LOG" 2>&1 \
 			|| { problem "Azure CLI liess sich nicht installieren, siehe setup.log"; return 1; }
 		ok "Azure CLI installiert"
 	fi
 
 	# ---------------------------------------------------------- Anmeldung
-	# Bewusst NICHT ins Log umgeleitet: du musst Link und Code sehen.
-	# Geraetecode statt Browser, damit es auch per SSH funktioniert.
 	if ! az account show >/dev/null 2>&1; then
-		echo
-		echo "  Es erscheinen jetzt ein Link und ein Code. Link im Browser oeffnen,"
-		echo "  Code eingeben, mit dem Konto anmelden, dem die DNS-Zone gehoert."
-		echo
-		az login --use-device-code --only-show-errors \
-			|| { problem "Azure-Anmeldung abgebrochen"; return 1; }
+		azure_login || return 1
 	fi
 	local who
 	who="$(az account show --query user.name -o tsv 2>/dev/null)"
 	ok "angemeldet als ${who:-unbekannt}"
 
-	# ------------------------------------------------------- Subscription
-	local -a sub_names sub_ids
-	mapfile -t sub_names < <(az account list --query "[?state=='Enabled'].name" -o tsv 2>/dev/null)
-	mapfile -t sub_ids   < <(az account list --query "[?state=='Enabled'].id"   -o tsv 2>/dev/null)
-	(( ${#sub_ids[@]} )) || { problem "Keine nutzbare Azure-Subscription sichtbar"; return 1; }
-	local sidx
-	echo "  Subscriptions:"
-	sidx="$(ask_choice "Welche?" "${sub_names[@]}")"
-	AZ_SUB="${sub_ids[$((sidx - 1))]}"
-	ok "Subscription: ${sub_names[$((sidx - 1))]}"
-
 	# ---------------------------------------------------------- DNS-Zonen
-	local -a z_names z_rgs z_labels=()
-	mapfile -t z_names < <(az network dns zone list --subscription "$AZ_SUB" \
-		--query "[].name" -o tsv 2>/dev/null)
-	mapfile -t z_rgs   < <(az network dns zone list --subscription "$AZ_SUB" \
-		--query "[].resourceGroup" -o tsv 2>/dev/null)
-	if ! (( ${#z_names[@]} )); then
-		note "In dieser Subscription liegt keine DNS-Zone."
+	info "Suche DNS-Zonen in allen Subscriptions..."
+	azure_find_zones
+	while ! (( ${#Z_NAMES[@]} )); do
+		note "Das Konto ${who:-unbekannt} sieht keine DNS-Zone."
+		if ask_yn "Mit einem anderen Azure-Konto anmelden?" j; then
+			az logout --only-show-errors >>"$LOG" 2>&1 || true
+			azure_login || return 1
+			who="$(az account show --query user.name -o tsv 2>/dev/null)"
+			ok "angemeldet als ${who:-unbekannt}"
+			azure_find_zones
+			continue
+		fi
 		info "Eine Zone anzulegen heisst auch, beim Registrar die Nameserver"
 		info "umzustellen und auf die Uebernahme zu warten. Das automatisiere"
 		info "ich bewusst nicht, dabei kann man sich die Domain abschiessen."
 		return 1
-	fi
-	local i
-	for ((i = 0; i < ${#z_names[@]}; i++)); do
-		z_labels+=("${z_names[i]}   (Resource Group: ${z_rgs[i]})")
 	done
 	echo "  Gefundene DNS-Zonen:"
-	local zidx; zidx="$(ask_choice "Welche Domain willst du nutzen?" "${z_labels[@]}")"
-	BASE_DOMAIN="${z_names[$((zidx - 1))]}"
-	AZ_RG="${z_rgs[$((zidx - 1))]}"
+	local zidx; zidx="$(ask_choice "Welche Domain willst du nutzen?" "${Z_LABELS[@]}")"
+	zidx=$((zidx - 1))
+	BASE_DOMAIN="${Z_NAMES[zidx]}"
+	AZ_RG="${Z_RGS[zidx]}"
+	AZ_SUB="${Z_SUBS[zidx]}"
+	# Der Zugang unten muss im Tenant der Zone entstehen, nicht in dem,
+	# der nach der Anmeldung zufaellig aktiv ist.
+	az account set --subscription "$AZ_SUB" --only-show-errors >>"$LOG" 2>&1
 	ok "Domain: $BASE_DOMAIN"
 
 	# ------------------------------------------------- Service Principal
 	# Caddy braucht Schreibrecht in der Zone, um fuer die DNS-01-Challenge
 	# einen TXT-Eintrag zu setzen. Der Umfang ist genau diese eine Zone.
-	local scope sp_name appid secret tenant out
+	local scope sp_name appid secret out tenant="${Z_TENANTS[zidx]}"
 	scope="/subscriptions/${AZ_SUB}/resourceGroups/${AZ_RG}/providers/Microsoft.Network/dnszones/${BASE_DOMAIN}"
 	sp_name="caddy-${BASE_DOMAIN//./-}-dns"
-	tenant="$(az account show --query tenantId -o tsv 2>/dev/null)"
 	appid="$(az ad sp list --display-name "$sp_name" --query "[0].appId" -o tsv \
 		--only-show-errors 2>/dev/null)"
 
@@ -542,7 +583,13 @@ azure_dns_setup() {
 	env_set AZURE_TENANT_ID "$tenant"
 	env_set AZURE_CLIENT_ID "$appid"
 	env_set AZURE_CLIENT_SECRET "$secret"
-	env_ask_if_empty ACME_EMAIL "E-Mail fuer die Zertifikate (Let's Encrypt)"
+	# Die Azure-Anmeldung ist fast immer eine brauchbare Mailadresse.
+	if [[ -z $(env_get ACME_EMAIL 2>/dev/null || true) && $who == *@*.* ]]; then
+		env_set ACME_EMAIL "$who"
+		info "E-Mail fuer die Zertifikate: $who"
+	else
+		env_ask_if_empty ACME_EMAIL "E-Mail fuer die Zertifikate (Let's Encrypt)"
+	fi
 	ok "Zugangsdaten in der .env gespeichert"
 
 	# ------------------------------------------------------ Gegenprobe

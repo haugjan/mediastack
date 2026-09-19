@@ -13,7 +13,20 @@
 # traegst du in der .env GITHUB_TOKEN ein (Contents Read-only genuegt), dann
 # steht er dort mit Rechten 640 und nicht in der Shell-Historie.
 #
+# setup.sh ruft das Skript bei jedem Start mit --from-setup auf. Dann ist
+# keine .env noetig, es gibt keine Hinweise am Ende, und der Exit-Code sagt
+# setup.sh, wie es weitergeht:
+#   0 = aktualisiert, 2 = schon aktuell, 1 = nicht geprueft (nichts geaendert),
+#   3 = beim Kopieren abgebrochen (Installation womoeglich halb neu)
+#
 set -uo pipefail
+
+# Alles steht in einem { }-Block. bash liest Skripte stueckweise, und dieses
+# Skript ueberschreibt sich unten selbst. Den Block liest bash vollstaendig,
+# bevor er laeuft, danach wird nichts mehr aus der Datei gelesen.
+{
+FROM_SETUP=0
+[[ ${1:-} == --from-setup ]] && FROM_SETUP=1
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR" || exit 1
@@ -28,9 +41,16 @@ info() { printf '  · %s\n' "$*"; }
 note() { printf '  %s!%s %s\n' "$Y" "$N" "$*"; }
 die()  { printf '\n%sAbbruch:%s %s\n\n' "$R" "$N" "$*" >&2; exit 1; }
 
-[[ -f .env ]] || die "Keine .env gefunden. Erst installieren: sudo ./setup.sh"
-# shellcheck source=/dev/null
-set -a; source ./.env; set +a
+# Ein Git-Checkout wuerde vom Release-Archiv ueberschrieben, samt
+# ungesicherter Aenderungen. Dort gilt git pull.
+[[ ! -d .git ]] || die "Das ist ein Git-Checkout. Aktualisieren mit:  git pull"
+
+if [[ -f .env ]]; then
+	# shellcheck source=/dev/null
+	set -a; source ./.env; set +a
+elif (( ! FROM_SETUP )); then
+	die "Keine .env gefunden. Erst installieren: sudo ./setup.sh"
+fi
 
 GITHUB_REPO="${GITHUB_REPO:-haugjan/mediastack}"
 
@@ -50,7 +70,7 @@ api() {
 		"https://api.github.com/$1"
 }
 
-printf '\n%sMediastack aktualisieren%s\n' "$B" "$N"
+(( FROM_SETUP )) || printf '\n%sMediastack aktualisieren%s\n' "$B" "$N"
 HAVE="$( [[ -f VERSION ]] && cat VERSION || echo "unbekannt" )"
 info "installiert: $HAVE"
 
@@ -72,7 +92,7 @@ info "verfuegbar:  $TAG"
 
 if [[ $HAVE == "$TAG" ]]; then
 	ok "Schon aktuell, nichts zu tun."
-	exit 0
+	exit $(( FROM_SETUP ? 2 : 0 ))
 fi
 
 TMP="$(mktemp -d)"
@@ -84,7 +104,7 @@ curl -fsSL "${AUTH[@]}" \
 	-o "$TMP/new.tar.gz" "$ASSET_URL" \
 	|| die "Download fehlgeschlagen."
 
-tar -xzf "$TMP/new.tar.gz" -C "$TMP" || die "Archiv ist beschaedigt."
+tar --no-same-owner -xzf "$TMP/new.tar.gz" -C "$TMP" || die "Archiv ist beschaedigt."
 NEW="$TMP/mediastack"
 
 # Gegenpruefen, bevor irgendetwas ueberschrieben wird.
@@ -101,8 +121,11 @@ cp -a compose.yaml "compose.yaml.vor-$HAVE" 2>/dev/null \
 
 # Ueberkopieren. .env und config/ sind im Archiv nicht enthalten und
 # koennen deshalb nicht getroffen werden.
-cp -a "$NEW/." . || die "Kopieren fehlgeschlagen. Rechte pruefen."
+cp -a "$NEW/." . || {
+	printf '\n%sAbbruch:%s Kopieren fehlgeschlagen. Rechte pruefen.\n\n' "$R" "$N" >&2
+	exit 3; }
 ok "Auf $TAG aktualisiert"
+(( FROM_SETUP )) && exit 0
 
 if [[ -f homepage/services.yaml ]]; then
 	note "homepage/services.yaml wird von setup.sh neu erzeugt"
@@ -117,3 +140,5 @@ cat <<EOF
     3. Container erneuern:   docker compose up -d
 
 EOF
+exit 0
+}

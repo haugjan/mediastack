@@ -20,17 +20,14 @@ Seit Schritt 5 des Installers ist nichts davon Handarbeit:
 sudo ./setup.sh
   5/9  Eigene Web-Adressen (optional)
        Domain jetzt automatisch einrichten? (j/n) [n]: j
-       · Azure CLI fehlt
+       · Azure CLI fehlt, wird installiert (Download ca. 100 MB)
        ✓ Azure CLI installiert
          Es erscheinen jetzt ein Link und ein Code...
        ✓ angemeldet als du@example.com
-         Subscriptions:
-          1) Visual Studio Professional
-          2) Pay-As-You-Go
-         Welche? [1-2]: 2
+       · Suche DNS-Zonen in allen Subscriptions...
          Gefundene DNS-Zonen:
-          1) example.com      (Resource Group: dns-rg)
-          2) andere.ch        (Resource Group: web)
+          1) example.com              (Pay-As-You-Go, Resource Group dns-rg)
+          2) andere.ch                (Visual Studio Professional, Resource Group web)
          Welche Domain willst du nutzen? [1-2]: 1
        ✓ Domain: example.com
        · Lege einen Zugang an, der NUR in dieser Zone schreiben darf
@@ -40,6 +37,12 @@ sudo ./setup.sh
        ✓ Zugangsdaten in der .env gespeichert
        ✓ Azure bestaetigt: *.example.com -> 100.92.14.7
 ```
+
+Du gibst weder Tenant noch Subscription noch Resource Group an: der Installer
+durchsucht alle Subscriptions, die dein Konto sieht, und listet die Zonen. Gibt
+es nur eine, wird sie ohne Rückfrage genommen. Findet er keine, bietet er an,
+dich mit einem anderen Konto anzumelden. Als E-Mail für Let's Encrypt nimmt er
+dein Azure-Konto.
 
 Die Anmeldung läuft über einen Gerätecode, funktioniert also auch per SSH ohne
 Browser auf dem Server. Danach brauchst du die Azure-Anmeldung nicht mehr und
