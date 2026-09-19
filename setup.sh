@@ -607,7 +607,27 @@ azure_dns_setup() {
 	return 0
 }
 
-if [[ -n $(env_get AZURE_CLIENT_SECRET 2>/dev/null || true) && -n $BASE_DOMAIN ]]; then
+# Taugen die Azure-Werte in der .env? Subscription, Tenant und Client
+# sind immer GUIDs. Ein Anzeigename wie "Default Directory (...)" an
+# ihrer Stelle heisst: von Hand falsch eingetragen, also neu einrichten.
+azure_env_valid() {
+	local k v guid='^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
+	for k in AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID AZURE_CLIENT_ID; do
+		v="$(env_get "$k" 2>/dev/null || true)"
+		[[ $v =~ $guid ]] || return 1
+	done
+	[[ -n $(env_get AZURE_RESOURCE_GROUP_NAME 2>/dev/null || true) ]] \
+		&& [[ -n $(env_get AZURE_CLIENT_SECRET 2>/dev/null || true) ]]
+}
+
+if [[ -n $BASE_DOMAIN ]] && ! azure_env_valid \
+	&& [[ -n $(env_get AZURE_TENANT_ID 2>/dev/null)$(env_get AZURE_CLIENT_ID 2>/dev/null) ]]; then
+	note "Die Azure-Werte in der .env sind unvollstaendig oder ungueltig."
+	info "Subscription, Tenant und Client muessen IDs sein, keine Namen."
+	info "Am einfachsten: gleich die automatische Einrichtung waehlen."
+fi
+
+if azure_env_valid && [[ -n $BASE_DOMAIN ]]; then
 	USE_PROXY=1
 	ok "Schon eingerichtet fuer $BASE_DOMAIN"
 	if ask_yn "DNS-Eintraege neu setzen? (etwa weil sich deine Internet-Adresse geaendert hat)" n; then

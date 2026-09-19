@@ -46,8 +46,9 @@ die()  { printf '\n%sAbbruch:%s %s\n\n' "$R" "$N" "$*" >&2; exit 1; }
 [[ ! -d .git ]] || die "Das ist ein Git-Checkout. Aktualisieren mit:  git pull"
 
 if [[ -f .env ]]; then
-	# shellcheck source=/dev/null
-	set -a; source ./.env; set +a
+	# shellcheck source=scripts/lib-env.sh
+	source ./scripts/lib-env.sh
+	load_env ./.env
 elif (( ! FROM_SETUP )); then
 	die "Keine .env gefunden. Erst installieren: sudo ./setup.sh"
 fi

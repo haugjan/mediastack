@@ -15,8 +15,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export RCLONE_CONFIG="${RCLONE_CONFIG:-/etc/rclone/rclone.conf}"
 
 [[ -f $REPO_DIR/.env ]] || { echo "FEHLER: .env fehlt" >&2; exit 1; }
-# shellcheck source=/dev/null
-set -a; source "$REPO_DIR/.env"; set +a
+# shellcheck source=scripts/lib-env.sh
+source "$REPO_DIR/scripts/lib-env.sh"
+load_env "$REPO_DIR/.env"
 
 : "${RCLONE_REMOTE:?RCLONE_REMOTE fehlt in .env}"
 : "${RCLONE_INBOX_PATH:?RCLONE_INBOX_PATH fehlt in .env}"

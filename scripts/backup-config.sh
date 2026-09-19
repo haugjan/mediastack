@@ -16,8 +16,9 @@ export RCLONE_CONFIG="${RCLONE_CONFIG:-/etc/rclone/rclone.conf}"
 KEEP_DAYS="${KEEP_DAYS:-30}"
 
 [[ -f $REPO_DIR/.env ]] || { echo "FEHLER: .env fehlt" >&2; exit 1; }
-# shellcheck source=/dev/null
-set -a; source "$REPO_DIR/.env"; set +a
+# shellcheck source=scripts/lib-env.sh
+source "$REPO_DIR/scripts/lib-env.sh"
+load_env "$REPO_DIR/.env"
 
 : "${RCLONE_REMOTE_CRYPT:?}" ; : "${RCLONE_CONFIG_BACKUP_PATH:?}"
 
