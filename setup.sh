@@ -794,6 +794,9 @@ INACTIVE=()
 (( USE_USENET ))  || INACTIVE+=(sabnzbd)
 (( USE_DOCS ))    || INACTIVE+=(paperless)
 if [[ -f $REPO_DIR/homepage/services.yaml.tmpl ]]; then
+	# Die Daten kommen ueber eine eigene Datei, denn stdin von python3 -
+	# ist schon mit dem Skript selbst belegt.
+	hp_data="$(mktemp)"
 	{
 		for svc in "${!PORT[@]}"; do
 			u="$(url_for "$svc")"
@@ -801,10 +804,11 @@ if [[ -f $REPO_DIR/homepage/services.yaml.tmpl ]]; then
 			printf 'url\t%s\t%s\n' "${svc^^}" "$u"
 		done
 		for svc in "${INACTIVE[@]}"; do printf 'off\t%s\n' "${svc^^}"; done
-	} | python3 - "$REPO_DIR/homepage/services.yaml.tmpl" "$REPO_DIR/homepage/services.yaml" <<'PY2'
+	} >"$hp_data"
+	python3 - "$REPO_DIR/homepage/services.yaml.tmpl" "$REPO_DIR/homepage/services.yaml" "$hp_data" <<'PY2'
 import re, sys, pathlib
 urls, off = {}, set()
-for line in sys.stdin:
+for line in open(sys.argv[3], encoding="utf-8"):
     f = line.rstrip("\n").split("\t")
     if f[0] == "url": urls[f[1]] = f[2]
     elif f[0] == "off": off.add(f[1])
@@ -837,6 +841,7 @@ for title, tiles in groups:
 out = re.sub(r"__URL_([A-Z]+)__", lambda m: urls.get(m.group(1), m.group(0)), out)
 pathlib.Path(sys.argv[2]).write_text(out, encoding="utf-8")
 PY2
+	rm -f "$hp_data"
 	chown "$MEDIA_USER":"$MEDIA_GROUP" "$REPO_DIR/homepage/services.yaml" 2>>"$LOG"
 	ok "Dashboard-Links gesetzt"
 fi
