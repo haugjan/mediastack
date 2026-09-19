@@ -271,6 +271,11 @@ services:
     image: redis:7-alpine
     container_name: paperless-redis
     profiles: [docs]
+    # Wie alle anderen Dienste als media laufen lassen. Sonst startet Redis
+    # als eigener Benutzer redis und darf in ./config/paperless-redis nicht
+    # schreiben. Es verweigert dann JEDEN Schreibbefehl ("MISCONF Redis is
+    # configured to save RDB snapshots"), und Paperless antwortet mit 500.
+    user: "${PUID}:${PGID}"
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     volumes:
       - ./config/paperless-redis:/data
