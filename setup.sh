@@ -917,6 +917,18 @@ else
 	note "Noch keine Schluessel gefunden. Einfach spaeter nochmal: sudo ./setup.sh"
 fi
 
+# --- Tautulli: API freigeben
+# Der Einrichtungsassistent von Tautulli schaltet die API aus. Ohne sie
+# bleibt die Plex-Kachel auf der Startseite bei "API not enabled". Die
+# Datei nur im gestoppten Zustand aendern, sonst schreibt Tautulli beim
+# Beenden seinen alten Stand zurueck.
+if [[ -f config/tautulli/config.ini ]] && grep -q '^api_enabled = 0' config/tautulli/config.ini; then
+	docker compose stop tautulli >>"$LOG" 2>&1
+	sed -i 's/^api_enabled = 0/api_enabled = 1/' config/tautulli/config.ini
+	docker compose start tautulli >>"$LOG" 2>&1
+	ok "Tautulli: API freigegeben"
+fi
+
 # --- qBittorrent: festes Passwort statt des temporaeren
 # Ohne eigenes Passwort vergibt qBittorrent bei jedem Start ein neues,
 # temporaeres und schreibt es ins Log. Damit melden wir uns einmal an,
