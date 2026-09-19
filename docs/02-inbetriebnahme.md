@@ -47,11 +47,19 @@ nur zu Peers, die sich von selbst melden.
 
 ## qBittorrent
 
-Passwort aus dem Log:
+Anmelden mit `QBIT_USER` und `QBIT_PASS` aus der `.env`. Das Passwort setzt
+`setup.sh` selbst: es meldet sich einmal mit dem temporären Passwort aus dem
+Log an, vergibt ein festes und schaltet dabei **Bypass authentication for
+clients on localhost** ein.
+
+Klappt das nicht (etwa weil du vorher schon ein eigenes Passwort gesetzt
+hast), von Hand: temporäres Passwort aus dem Log holen,
 
 ```bash
 docker compose logs qbittorrent | grep -i "temporary password"
 ```
+
+und die beiden WebUI-Zeilen unten selbst setzen.
 
 Dann `https://qbit.example.com` und unter **Tools → Options**:
 
@@ -60,8 +68,8 @@ Dann `https://qbit.example.com` und unter **Tools → Options**:
 | Downloads | Default Save Path | `/data/torrents` |
 | Downloads | Pre-allocate disk space | aus |
 | BitTorrent | Torrent Queueing | an, max 5 aktive Downloads |
-| WebUI | **Bypass authentication for clients on localhost** | **an** |
-| WebUI | Benutzername und Passwort | eigenes setzen, danach als `QBIT_USER` / `QBIT_PASS` in die `.env` |
+| WebUI | **Bypass authentication for clients on localhost** | **an** (setzt `setup.sh`) |
+| WebUI | Benutzername und Passwort | setzt `setup.sh`, steht als `QBIT_USER` / `QBIT_PASS` in der `.env` |
 
 Der Haken bei **Bypass authentication for clients on localhost** ist nicht
 optional. Gluetun schiebt den weitergeleiteten Port per API-Aufruf von

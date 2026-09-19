@@ -787,17 +787,56 @@ url_for() {
 		echo "http://${LAN_IP:-localhost}:${PORT[$svc]}"
 	fi
 }
+# Dienste, die nicht laufen, bekommen keine Kachel. Sonst zeigt die
+# Startseite fuer sie dauerhaft "API Error".
+INACTIVE=()
+(( USE_TORRENT )) || INACTIVE+=(qbittorrent)
+(( USE_USENET ))  || INACTIVE+=(sabnzbd)
+(( USE_DOCS ))    || INACTIVE+=(paperless)
 if [[ -f $REPO_DIR/homepage/services.yaml.tmpl ]]; then
-	cp "$REPO_DIR/homepage/services.yaml.tmpl" "$REPO_DIR/homepage/services.yaml"
-	for svc in "${!PORT[@]}"; do
-		u="$(url_for "$svc")"
-		[[ $svc == plex ]] && u="http://${LAN_IP:-localhost}:32400/web"
-		python3 - "$REPO_DIR/homepage/services.yaml" "__URL_${svc^^}__" "$u" <<'PY'
-import sys, pathlib
-p = pathlib.Path(sys.argv[1])
-p.write_text(p.read_text(encoding="utf-8").replace(sys.argv[2], sys.argv[3]), encoding="utf-8")
-PY
-	done
+	{
+		for svc in "${!PORT[@]}"; do
+			u="$(url_for "$svc")"
+			[[ $svc == plex ]] && u="http://${LAN_IP:-localhost}:32400/web"
+			printf 'url\t%s\t%s\n' "${svc^^}" "$u"
+		done
+		for svc in "${INACTIVE[@]}"; do printf 'off\t%s\n' "${svc^^}"; done
+	} | python3 - "$REPO_DIR/homepage/services.yaml.tmpl" "$REPO_DIR/homepage/services.yaml" <<'PY2'
+import re, sys, pathlib
+urls, off = {}, set()
+for line in sys.stdin:
+    f = line.rstrip("\n").split("\t")
+    if f[0] == "url": urls[f[1]] = f[2]
+    elif f[0] == "off": off.add(f[1])
+
+# Die Vorlage in Gruppen ("- Name:") und Kacheln ("    - Name:") zerlegen.
+# Eine Kachel faellt weg, wenn ihr href auf einen inaktiven Dienst zeigt,
+# eine Gruppe, wenn danach keine Kachel mehr in ihr steht.
+head, groups = [], []
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines(keepends=True):
+    if re.match(r"- \S", line):
+        groups.append([line, []])
+    elif re.match(r"    - \S", line) and groups:
+        groups[-1][1].append([line])
+    elif groups and groups[-1][1]:
+        groups[-1][1][-1].append(line)
+    elif groups:
+        groups[-1][0] += line
+    else:
+        head.append(line)
+
+def keep(tile):
+    m = re.search(r"__URL_([A-Z]+)__", "".join(tile))
+    return not (m and m.group(1) in off)
+
+out = "".join(head)
+for title, tiles in groups:
+    tiles = [t for t in tiles if keep(t)]
+    if tiles:
+        out += title + "".join("".join(t) for t in tiles)
+out = re.sub(r"__URL_([A-Z]+)__", lambda m: urls.get(m.group(1), m.group(0)), out)
+pathlib.Path(sys.argv[2]).write_text(out, encoding="utf-8")
+PY2
 	chown "$MEDIA_USER":"$MEDIA_GROUP" "$REPO_DIR/homepage/services.yaml" 2>>"$LOG"
 	ok "Dashboard-Links gesetzt"
 fi
@@ -833,7 +872,8 @@ fi
 # --- Warten und API-Schluessel selbst einsammeln
 info "Auf die Dienste warten und Schluessel einsammeln"
 for i in $(seq 1 40); do
-	[[ -f config/sonarr/config.xml && -f config/radarr/config.xml ]] && break
+	[[ -f config/sonarr/config.xml && -f config/radarr/config.xml \
+		&& -f config/overseerr/settings.json && -f config/tautulli/config.ini ]] && break
 	sleep 5
 done
 
@@ -849,20 +889,79 @@ harvest() {
 		bazarr)
 			[[ -f config/bazarr/config/config.yaml ]] &&
 				key=$(awk '/^ *apikey:/ {print $2; exit}' config/bazarr/config/config.yaml | tr -d "'\"") ;;
+		tautulli)
+			[[ -f config/tautulli/config.ini ]] &&
+				key=$(awk -F' *= *' '/^api_key/ {print $2; exit}' config/tautulli/config.ini) ;;
+		overseerr)
+			# Den Schluessel legt Overseerr schon beim ersten Start an, noch
+			# bevor es im Browser eingerichtet ist.
+			[[ -f config/overseerr/settings.json ]] &&
+				key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["main"]["apiKey"])' \
+					config/overseerr/settings.json 2>/dev/null) ;;
 	esac
 	[[ -n $key ]] || return 1
 	env_set "${app^^}_API_KEY" "$key"
 }
 FOUND=0
-for app in sonarr radarr lidarr prowlarr bazarr sabnzbd; do
+for app in sonarr radarr lidarr prowlarr bazarr sabnzbd tautulli overseerr; do
 	harvest "$app" && { FOUND=$((FOUND+1)); }
 done
 if (( FOUND )); then
 	ok "$FOUND Schluessel automatisch uebernommen"
-	docker compose up -d --force-recreate recyclarr unpackerr backfill homepage >>"$LOG" 2>&1
 else
 	note "Noch keine Schluessel gefunden. Einfach spaeter nochmal: sudo ./setup.sh"
 fi
+
+# --- qBittorrent: festes Passwort statt des temporaeren
+# Ohne eigenes Passwort vergibt qBittorrent bei jedem Start ein neues,
+# temporaeres und schreibt es ins Log. Damit melden wir uns einmal an,
+# setzen ein festes Passwort und schalten gleich die Anmeldung fuer
+# localhost ab. Die braucht gluetun, um qBittorrent den VPN-Port zu melden.
+qbit_login() {
+	# Liefert den HTTP-Status: 200/204 = angemeldet, 000 = nicht erreichbar.
+	curl -sS -o /dev/null -w '%{http_code}' --max-time 5 ${2:+-c "$2"} \
+		--data-urlencode "username=$(env_get QBIT_USER)" --data-urlencode "password=$1" \
+		http://localhost:8080/api/v2/auth/login 2>>"$LOG"
+}
+qbit_setup() {
+	local tmp pw jar code i
+	[[ -n $(env_get QBIT_USER) ]] || return 1
+	# Direkt nach dem Start steht das temporaere Passwort noch nicht im Log.
+	for i in $(seq 1 24); do
+		tmp="$(docker logs qbittorrent 2>&1 \
+			| sed -n 's/.*temporary password is provided for this session: *//p' \
+			| tail -1 | tr -d '[:space:]')"
+		[[ -n $tmp ]] && break
+		sleep 5
+	done
+	[[ -n $tmp ]] || return 1
+	jar="$(mktemp)"
+	# Nur bei "nicht erreichbar" erneut versuchen. Falsche Anmeldungen
+	# zaehlt qBittorrent und sperrt nach fuenf die Adresse fuer eine Stunde.
+	for i in $(seq 1 24); do
+		code="$(qbit_login "$tmp" "$jar")"
+		[[ $code != 000 ]] && break
+		sleep 5
+	done
+	[[ $code == 20[04] ]] || { rm -f "$jar"; return 1; }
+	pw="$(gen_secret 24)"
+	curl -fsS -b "$jar" --max-time 10 \
+		--data-urlencode "json={\"web_ui_password\":\"$pw\",\"bypass_local_auth\":true}" \
+		http://localhost:8080/api/v2/app/setPreferences >>"$LOG" 2>&1
+	rm -f "$jar"
+	# Gegenprobe mit dem neuen Passwort, erst dann speichern.
+	[[ $(qbit_login "$pw") == 20[04] ]] || return 1
+	env_set QBIT_PASS "$pw"
+}
+if (( USE_TORRENT )) && [[ -z $(env_get QBIT_PASS 2>/dev/null || true) ]]; then
+	if qbit_setup; then
+		ok "qBittorrent: festes Passwort gesetzt (steht in der .env als QBIT_PASS)"
+		FOUND=$((FOUND+1))
+	else
+		note "qBittorrent-Passwort nicht gesetzt. Von Hand: docs/02-inbetriebnahme.md"
+	fi
+fi
+(( FOUND )) && docker compose up -d --force-recreate recyclarr unpackerr backfill homepage >>"$LOG" 2>&1
 
 # --- VPN-Gegenprobe
 if (( USE_TORRENT )); then
@@ -899,7 +998,7 @@ fi
 printf '\n%sNaechste Schritte%s\n' "$B" "$N"
 n=1
 printf '  %d. Ab- und wieder anmelden, dann brauchst du kein sudo mehr fuer docker.\n' $((n++))
-if (( USE_TORRENT )); then
+if (( USE_TORRENT )) && ! grep -qs 'LocalHostAuth=false' config/qbittorrent/qBittorrent/qBittorrent.conf; then
 	printf '  %d. In qBittorrent unter Werkzeuge, Einstellungen, Web-UI die Option\n' $((n++))
 	printf '     "Bypass authentication for clients on localhost" EINSCHALTEN.\n'
 	printf '     Ohne die bekommst du keinen Port und kannst nichts weitergeben.\n'
