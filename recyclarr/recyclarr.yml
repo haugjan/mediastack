@@ -20,8 +20,11 @@
 # dort bleiben die Profile handkonfiguriert.
 ################################################################################
 
+# Die Instanznamen muessen ueber ALLE Dienste hinweg eindeutig sein. Heissen
+# Sonarr und Radarr beide "main", meldet Recyclarr nur im Debug-Log
+# "Duplicate instances", schreibt nichts und endet trotzdem mit Code 0.
 sonarr:
-  main:
+  serien:
     base_url: http://sonarr:8989
     api_key: !env_var SONARR_API_KEY
 
@@ -41,7 +44,7 @@ sonarr:
         - trash_id: 6f0872eebfc95b1f93474b7ac866ced0  # [Unwanted] Unwanted Formats German
 
 radarr:
-  main:
+  filme:
     base_url: http://radarr:7878
     api_key: !env_var RADARR_API_KEY
 
