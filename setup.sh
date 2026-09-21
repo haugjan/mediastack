@@ -1209,12 +1209,17 @@ if (( USE_TORRENT )) && [[ -n $(env_get QBIT_PASS 2>/dev/null || true) ]]; then
 				--data-urlencode "savePath=/data/torrents/$cat" \
 				http://localhost:8080/api/v2/torrents/editCategory >>"$LOG" 2>&1
 		done
+		# auto_tmm_enabled ist der entscheidende Schalter: ohne ihn ist die
+		# Kategorie nur ein Etikett und qBittorrent legt ALLES in den
+		# Standardpfad, die oben gesetzten Zielpfade bleiben wirkungslos.
+		# category_changed_tmm_enabled zieht laufende Torrents nach, wenn
+		# sich der Pfad einer Kategorie spaeter noch einmal aendert.
 		# Vorbelegen kostet bei Hardlinks nur Zeit, Queueing verhindert,
 		# dass zwanzig Downloads gleichzeitig die Leitung teilen.
 		curl -sS -o /dev/null -b "$qjar" --max-time 10 \
-			--data-urlencode 'json={"save_path":"/data/torrents","preallocate_all":false,"queueing_enabled":true,"max_active_downloads":5,"max_active_uploads":5,"max_active_torrents":10}' \
+			--data-urlencode 'json={"save_path":"/data/torrents","auto_tmm_enabled":true,"category_changed_tmm_enabled":true,"save_path_changed_tmm_enabled":true,"preallocate_all":false,"queueing_enabled":true,"max_active_downloads":5,"max_active_uploads":5,"max_active_torrents":10}' \
 			http://localhost:8080/api/v2/app/setPreferences >>"$LOG" 2>&1
-		ok "qBittorrent: Kategorien und Zielpfade gesetzt"
+		ok "qBittorrent: Kategorien, Zielpfade und automatische Ablage gesetzt"
 	else
 		note "qBittorrent antwortet nicht, Kategorien nicht gesetzt"
 	fi
