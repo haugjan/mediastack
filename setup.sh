@@ -239,7 +239,7 @@ fi
 info "Pakete nachinstallieren, das kann einen Moment dauern"
 apt-get update -qq >>"$LOG" 2>&1
 try "Grundpakete" apt-get install -y -qq ca-certificates curl gnupg git jq \
-	smartmontools vainfo iproute2
+	smartmontools vainfo iproute2 rclone
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
 	ok "Docker ist da ($(docker --version | cut -d, -f1))"
@@ -874,14 +874,43 @@ PY2
 	ok "Dashboard-Links gesetzt"
 fi
 
-# --- systemd-Timer bereitlegen (aktiviert werden sie erst mit OneDrive)
+# --- systemd-Timer ablegen UND einschalten
+# Frueher wurden die Units nur hierher kopiert. Eingeschaltet hat sie
+# niemand, also lief weder der OneDrive-Abgleich noch die Sicherung. Das
+# faellt erst auf, wenn man die Sicherung braucht.
 if [[ -d $REPO_DIR/systemd ]]; then
 	for f in "$REPO_DIR"/systemd/*.service "$REPO_DIR"/systemd/*.timer; do
 		[[ -e $f ]] || continue
 		sed "s|@REPO_DIR@|$REPO_DIR|g" "$f" >"/etc/systemd/system/$(basename "$f")"
 	done
 	systemctl daemon-reload >>"$LOG" 2>&1
-	ok "Sicherungs-Timer bereitgelegt (noch nicht aktiv)"
+
+	# Jeder Timer wird nur eingeschaltet, wenn sein Ziel wirklich
+	# eingerichtet ist. Sonst scheitert er im Minutentakt und fuellt das
+	# Journal, statt sichtbar zu fehlen.
+	RCLONE_CONF="${RCLONE_CONFIG:-/etc/rclone/rclone.conf}"
+	TIMERS=0
+	if command -v rclone >/dev/null 2>&1 && [[ -f $RCLONE_CONF ]]; then
+		if [[ -n $(env_get RCLONE_REMOTE) && -n $(env_get RCLONE_INBOX_PATH) ]]; then
+			systemctl enable --now paperless-inbox.timer >>"$LOG" 2>&1 \
+				&& TIMERS=$((TIMERS+1))
+		fi
+		if [[ -n $(env_get RCLONE_REMOTE) && -n $(env_get RCLONE_MIRROR_PATH) ]]; then
+			systemctl enable --now paperless-export.timer >>"$LOG" 2>&1 \
+				&& TIMERS=$((TIMERS+1))
+		fi
+		if [[ -n $(env_get RCLONE_REMOTE_CRYPT) && -n $(env_get RCLONE_CONFIG_BACKUP_PATH) ]]; then
+			systemctl enable --now mediastack-backup.timer >>"$LOG" 2>&1 \
+				&& TIMERS=$((TIMERS+1))
+		fi
+	fi
+	if (( TIMERS )); then
+		ok "$TIMERS Timer laufen (OneDrive und Sicherung)"
+	else
+		note "Sicherung und OneDrive laufen noch NICHT. Es fehlt rclone:"
+		info "  sudo rclone config   (danach nach /etc/rclone/rclone.conf kopieren)"
+		info "  Anleitung: docs/06-paperless-onedrive.md, dann setup.sh erneut"
+	fi
 fi
 
 cd "$REPO_DIR" || stop "Kann nicht nach $REPO_DIR wechseln."
@@ -1056,6 +1085,21 @@ if (( USE_TORRENT )); then
 		problem "WARNUNG: Torrent-Verkehr laeuft NICHT durch das VPN. Bitte pruefen, bevor du Torrents nutzt."
 	elif [[ -n $v ]]; then
 		ok "VPN aktiv (Torrents zeigen nach aussen $v statt $r)"
+	fi
+
+	# Eingehenden Port gegenpruefen. Gluetun legt den von Proton
+	# zugewiesenen Port in /tmp/gluetun/forwarded_port ab. Fehlt die Datei,
+	# hat Proton NAT-PMP abgelehnt, und das heisst praktisch immer: der
+	# WireGuard-Schluessel wurde ohne das Haekchen "NAT-PMP (Port
+	# Forwarding)" erzeugt. Ohne eingehenden Port findet qBittorrent kaum
+	# Peers und gibt nichts weiter. Der Tunnel selbst steht trotzdem, der
+	# Fehler faellt sonst monatelang nicht auf.
+	fp=$(docker compose exec -T gluetun sh -c \
+		'cat /tmp/gluetun/forwarded_port 2>/dev/null' 2>/dev/null | tr -d '[:space:]')
+	if [[ -n $fp && $fp != 0 ]]; then
+		ok "Eingehender Port vom VPN: $fp"
+	else
+		problem "Keine Portweiterleitung vom VPN. Schluessel bei Proton neu erzeugen und dabei NAT-PMP und P2P aktivieren, sonst seedet qBittorrent nicht."
 	fi
 fi
 
