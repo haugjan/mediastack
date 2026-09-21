@@ -282,6 +282,15 @@ fi
 # Desktop-Systeme schlafen ein, und ein schlafender Server ist keiner.
 try "Ruhezustand abschalten" systemctl mask sleep.target suspend.target \
 	hibernate.target hybrid-sleep.target
+
+# Redis (fuer Paperless) forkt sich zum Sichern und braucht dafuer kurz die
+# doppelte Speichermenge auf dem Papier. Ohne overcommit lehnt der Kernel das
+# ab, und Redis meldet bei jedem Versuch "Background saving error".
+if [[ $(sysctl -n vm.overcommit_memory 2>/dev/null) != 1 ]]; then
+	echo 'vm.overcommit_memory = 1' >/etc/sysctl.d/60-mediastack-redis.conf
+	sysctl -q -w vm.overcommit_memory=1 >>"$LOG" 2>&1
+	ok "Speicherreservierung fuer Redis erlaubt"
+fi
 if [[ -d /proc/acpi/button/lid ]]; then
 	mkdir -p /etc/systemd/logind.conf.d
 	printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' \
@@ -373,8 +382,27 @@ mkdir -p "$REPO_DIR"/config/{paperless-db,paperless-redis}
 mkdir -p "$REPO_DIR"/config/audiobookshelf/{config,metadata}
 mkdir -p "$REPO_DIR"/config/scrutiny/{config,influxdb}
 mkdir -p "$REPO_DIR"/config/caddy/{data,config}
-chown -R "$MEDIA_USER":"$MEDIA_GROUP" "$REPO_DIR/config" 2>>"$LOG"
-chmod -R 775 "$REPO_DIR/config" 2>>"$LOG"
+# Postgres und Redis NICHT mitnehmen. Beide bringen ihren eigenen Benutzer
+# mit (uid 70 und 999) und richten ihren Ordner beim Start selbst ein. Ein
+# chown auf media entzieht dem laufenden Dienst die Rechte an seinen eigenen
+# Dateien: Postgres beantwortet danach JEDE Anfrage mit "could not open file
+# ... Permission denied", Redis verweigert jeden Schreibbefehl. Der
+# Healthcheck (pg_isready) prueft nur den Socket und meldet weiter "healthy",
+# der Ausfall faellt also erst in Paperless auf.
+find "$REPO_DIR/config" -mindepth 1 -maxdepth 1 \
+	! -name paperless-db ! -name paperless-redis \
+	-exec chown -R "$MEDIA_USER":"$MEDIA_GROUP" {} + 2>>"$LOG"
+find "$REPO_DIR/config" -mindepth 1 -maxdepth 1 \
+	! -name paperless-db ! -name paperless-redis \
+	-exec chmod -R 775 {} + 2>>"$LOG"
+chown "$MEDIA_USER":"$MEDIA_GROUP" "$REPO_DIR/config" 2>>"$LOG"
+chmod 775 "$REPO_DIR/config" 2>>"$LOG"
+
+# Recyclarr laeuft als media und legt unter recyclarr/ seinen Zustand ab
+# (state/, cache/, repositories/). Gehoert der Ordner root, bricht jeder
+# Lauf mit "Access to the path '/config/state' is denied" ab.
+mkdir -p "$REPO_DIR/recyclarr"
+chown -R "$MEDIA_USER":"$MEDIA_GROUP" "$REPO_DIR/recyclarr" 2>>"$LOG"
 ok "Konfigurationsordner vorbereitet"
 
 # =========================================================================
