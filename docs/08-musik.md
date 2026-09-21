@@ -74,11 +74,70 @@ nachinstalliert, Tubifarry braucht alle drei.
 3. Lidarr startet neu
 
 Erscheint **System → Plugins** nicht, ist der Container nicht auf dem
-`develop`-Tag. Prüfen mit `docker compose images lidarr`.
+`develop`-Tag. Prüfen mit `docker compose images lidarr`. Gegenprobe über die
+API, das Menü heisst dort anders als man denkt:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "X-Api-Key: $LIDARR_API_KEY" http://localhost:8686/api/v1/system/plugins
+```
+
+`200` heisst plugin-fähig, `404` nicht. Der naheliegende Pfad
+`/api/v1/plugin` (ohne `system`, ohne `s`) antwortet in **beiden** Fällen mit
+404 und taugt nicht als Prüfung.
+
+### Was Tubifarry dazu bringt
+
+Nicht nur YouTube. Nach der Installation stehen in Lidarr zusätzliche Quellen
+zur Auswahl, jede als Indexer und passender Download-Client:
+
+| Quelle | Wofür |
+|---|---|
+| **Tubifarry / Youtube** | YouTube, der Standardweg, siehe unten |
+| **Slskd** | Soulseek. Für internationale und obskure Musik die mit Abstand beste Trefferquote, braucht aber einen eigenen `slskd`-Container, der in diesem Stack noch fehlt |
+| **Lucida, DABMusic** | Streaming-Quellen |
+| **SubSonic** | eine bestehende Subsonic-Bibliothek als Quelle |
+
+Dazu kommen Import-Listen für Last.fm und ListenBrainz neben den
+Spotify-Listen.
+
+### Der Indexer braucht Spotify-Zugangsdaten
+
+Das ist der Schritt, an dem es still scheitert. Tubifarry löst ein gesuchtes
+Album zuerst über die **Spotify-API** auf und sucht erst danach bei YouTube.
+Ohne eigene Zugangsdaten antwortet Spotify mit `403 Forbidden`, der Indexer
+liefert null Treffer, und in der Oberfläche sieht das aus, als gäbe es das
+Album nirgends. Im Protokoll steht es deutlich:
+
+```
+Warn|TubifarryIndexer| HTTP request failed: [403:Forbidden]
+  at [https://api.spotify.com/v1/search?q=album%3A...]
+```
+
+Die Zugangsdaten sind kostenlos und in zwei Minuten angelegt:
+
+1. [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+   mit deinem normalen Spotify-Konto öffnen, **Create app**
+2. Name und Beschreibung frei wählen, als Redirect URI genügt
+   `http://localhost:8686`, API auswählen: **Web API**
+3. Client ID und Client Secret kopieren
+4. In Lidarr unter **Settings → Indexers → Tubifarry** in die Felder
+   **Spotify Client ID** und **Spotify Client Secret** eintragen
+
+Ein Bezahlkonto ist dafür nicht nötig, ein kostenloses Spotify-Konto genügt.
 
 ### YouTube als Quelle
 
-Unter **Settings → Download Clients → Add → Youtube** einrichten.
+Unter **Settings → Download Clients → Add → Youtube** einrichten. Zwei Felder
+sind Pflicht, sonst landet nichts im richtigen Ordner:
+
+| Feld | Wert |
+|---|---|
+| Download Path | `/data/youtube` |
+| FFmpeg Path | `/usr/bin/ffmpeg` |
+
+`/data/youtube` muss dem Dienstbenutzer gehören und **unter `/data` liegen**,
+sonst kopiert Lidarr beim Import statt zu verlinken.
 
 > **YouTube wehrt sich aktiv.** Das steht so im README von Tubifarry:
 > automatisierte Downloader werden erkannt und blockiert. Dagegen braucht es
