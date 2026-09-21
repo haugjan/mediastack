@@ -798,9 +798,9 @@ env_set COMPOSE_PROFILES "$PROF_STR"
 ok "Aktive Bereiche: ${PROF_STR:-nur Grundausstattung}"
 
 if [[ -n $BASE_DOMAIN ]]; then
-	env_set HOMEPAGE_ALLOWED_HOSTS "localhost:3000,$LAN_IP:3000,home.$BASE_DOMAIN"
+	env_set HOMEPAGE_ALLOWED_HOSTS "localhost:3000,homepage:3000,$LAN_IP:3000,home.$BASE_DOMAIN"
 else
-	env_set HOMEPAGE_ALLOWED_HOSTS "localhost:3000,$LAN_IP:3000,${TS_IP:-127.0.0.1}:3000"
+	env_set HOMEPAGE_ALLOWED_HOSTS "localhost:3000,homepage:3000,$LAN_IP:3000,${TS_IP:-127.0.0.1}:3000"
 fi
 
 chown "$ADMIN_USER":"$MEDIA_GROUP" "$REPO_DIR/.env" 2>>"$LOG"
@@ -1450,6 +1450,80 @@ print((g or d or [{"name":""}])[0]["name"])' 2>>"$LOG"
 	else
 		ok "Overseerr ist bereits angebunden"
 	fi
+fi
+
+# --- Uptime Kuma: Monitore anlegen
+# Kuma 1.x hat keine Schnittstelle zum Anlegen von Monitoren, alles laeuft
+# ueber socket.io aus dem Browser heraus. Deshalb schreiben wir direkt in
+# seine Datenbank - und nur im gestoppten Zustand, weil Kuma die Monitore im
+# Speicher haelt und sie beim Beenden zurueckschreiben wuerde. Dasselbe
+# Vorgehen wie bei Tautulli weiter oben.
+#
+# Das Admin-Konto legst du beim ersten Aufruf im Browser an. Vorher gibt es
+# keinen Benutzer, dem die Monitore gehoeren koennten. Dann passiert hier
+# nichts, und ein spaeteres  sudo ./setup.sh  holt es nach.
+KUMA_DB="$REPO_DIR/config/uptime-kuma/kuma.db"
+if [[ -f $KUMA_DB ]]; then
+	docker compose stop uptime-kuma >>"$LOG" 2>&1
+	KUMA_OUT="$(python3 - "$KUMA_DB" "${LAN_IP:-127.0.0.1}" \
+		"$USE_TORRENT" "$USE_USENET" "$USE_DOCS" 2>>"$LOG" <<'PY'
+import json, sqlite3, sys
+
+db, lan, torrent, usenet, docs = sys.argv[1:6]
+
+# Name, Adresse. Die Adressen sind containerintern, Kuma haengt im selben
+# Netz. Plex laeuft im Host-Netz und ist nur ueber die LAN-Adresse zu
+# erreichen. /ping bzw. /identity antworten ohne Anmeldung.
+mon = [
+    ("Plex",        "http://%s:32400/identity" % lan),
+    ("Serien",      "http://sonarr:8989/ping"),
+    ("Filme",       "http://radarr:7878/ping"),
+    ("Musik-Suche", "http://lidarr:8686/ping"),
+    ("Suchquellen", "http://prowlarr:9696/ping"),
+    ("Untertitel",  "http://bazarr:6767/"),
+    ("Wuensche",    "http://overseerr:5055/api/v1/status"),
+    ("Musik",       "http://navidrome:4533/ping"),
+    ("Hoerbuecher", "http://audiobookshelf:80/healthcheck"),
+    ("Statistiken", "http://tautulli:8181/status"),
+    ("Aufraeumen",  "http://cleanuparr:11011/health"),
+    ("Startseite",  "http://homepage:3000/"),
+]
+# qBittorrent haengt im Netz von gluetun, deshalb gluetun:8080.
+if torrent == "1":
+    mon.append(("Torrents", "http://gluetun:8080/"))
+if usenet == "1":
+    mon.append(("Usenet", "http://sabnzbd:8080/"))
+if docs == "1":
+    mon.append(("Dokumente", "http://paperless:8000/"))
+
+c = sqlite3.connect(db)
+row = c.execute("select id from user order by id limit 1").fetchone()
+if not row:
+    print("kein-konto"); raise SystemExit(0)
+
+have = {r[0] for r in c.execute("select name from monitor")}
+added = 0
+for name, url in mon:
+    if name in have:
+        continue
+    c.execute(
+        "insert into monitor (name,user_id,active,interval,retry_interval,"
+        "timeout,maxretries,url,type,accepted_statuscodes_json) "
+        "values (?,?,1,60,60,48,2,?,'http',?)",
+        (name, row[0], url, json.dumps(["200-299"])))
+    added += 1
+c.commit()
+print(added)
+PY
+)"
+	docker compose start uptime-kuma >>"$LOG" 2>&1
+	case "$KUMA_OUT" in
+		kein-konto)
+			note "Uptime Kuma: lege im Browser das Konto an, dann setup.sh erneut" ;;
+		0)  ok "Uptime Kuma: Monitore stehen bereits" ;;
+		[0-9]*) ok "Uptime Kuma: $KUMA_OUT Monitore angelegt" ;;
+		*)  note "Uptime Kuma: Monitore nicht angelegt, Details in setup.log" ;;
+	esac
 fi
 
 # --- VPN-Gegenprobe

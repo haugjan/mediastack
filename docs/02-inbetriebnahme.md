@@ -32,6 +32,7 @@ Mit diesen Schlüsseln richtet es danach ein:
 | Bazarr | Sonarr und Radarr, Sprachprofil Deutsch vor Englisch, Synchronisierung |
 | Overseerr | Sonarr und Radarr mit dem deutschen Qualitätsprofil |
 | Tautulli | API freigegeben, damit die Plex-Kachel Zahlen zeigt |
+| Uptime Kuma | ein Monitor je Dienst, sobald das Konto angelegt ist |
 
 Ebenfalls automatisch: der Vergleich der Gluetun-IP mit der Host-IP, und die
 Gegenprobe, ob ProtonVPN wirklich einen eingehenden Port weiterleitet.
@@ -62,7 +63,7 @@ ja, der Fehler fällt sonst monatelang nicht auf.
 
 ## Was im Browser bleibt
 
-Vier Dinge, und alle hängen an einem Konto oder an einer Auswahl, die dir
+Fünf Dinge, und alle hängen an einem Konto oder an einer Auswahl, die dir
 niemand abnehmen kann.
 
 ### 1. Suchquellen in Prowlarr
@@ -99,6 +100,18 @@ Unter **Config → Folders** gehören Temporary Download Folder auf
 `tv`, `movies`, `music`, `books` mit Folder `/data/usenet/complete/<name>`.
 Unter **Config → Switches** lohnt **Direct Unpack**, das entpackt parallel
 zum Download statt danach.
+
+### 5. Uptime Kuma
+
+`https://status.example.com`, beim ersten Aufruf Benutzername und Passwort
+vergeben. Danach einmal `sudo ./setup.sh` — dann legt der Installer für
+jeden laufenden Dienst einen Monitor an. Vorher geht das nicht: ohne Konto
+gibt es niemanden, dem die Monitore gehören könnten.
+
+Kuma hat als einzige App im Stack keine Schnittstelle dafür, alles läuft
+über den Browser. Der Installer schreibt deshalb direkt in seine Datenbank,
+und zwar nur, solange der Container steht — Kuma hält die Monitore im
+Speicher und würde sie beim Beenden zurückschreiben.
 
 ### Und Paperless
 

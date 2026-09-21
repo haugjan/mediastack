@@ -98,6 +98,11 @@ Rund 1500 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
   zurückschicken", statt JSON von Hand zu bauen — das überlebt App-Updates.
   Jeder Aufruf gibt **3** zurück, wenn schon alles stand: nur so kann die
   Ausgabe zwischen „eingetragen" und „war schon da" unterscheiden.
+- Uptime Kuma ist die Ausnahme: keine API, alles über socket.io. Monitore
+  werden direkt in `config/uptime-kuma/kuma.db` geschrieben, und nur im
+  **gestoppten** Zustand, sonst überschreibt Kuma sie beim Beenden aus dem
+  Speicher. Ohne Konto im Browser gibt es keine `user_id`, dann wird der
+  Schritt übersprungen.
 - Was `setup.sh` einträgt, ist immer die **containerinterne** Adresse
   (`http://sonarr:8989`, für qBittorrent `gluetun:8080`). Was es selbst
   aufruft, geht über `localhost:<veröffentlichter Port>`.
