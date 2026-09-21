@@ -8,3 +8,4 @@ Caddyfile text eol=lf
 # Nicht ins Release-Archiv packen
 /.github       export-ignore
 /.gitattributes export-ignore
+/CLAUDE.md     export-ignore
