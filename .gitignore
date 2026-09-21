@@ -19,3 +19,6 @@
 .DS_Store
 Thumbs.db
 *.swp
+
+# Legt "python3 -m py_compile" bei der Pruefung vor dem Commit an.
+__pycache__/

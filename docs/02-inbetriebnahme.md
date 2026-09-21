@@ -1,8 +1,8 @@
 # 2. Inbetriebnahme
 
-`setup.sh` nimmt dir den mechanischen Teil ab, inklusive des Einsammelns
-aller API-Keys. Was bleibt, ist die Konfiguration in den Weboberflächen, die
-sich nicht sinnvoll skripten lässt.
+`setup.sh` nimmt dir den mechanischen Teil ab: es sammelt die API-Schlüssel
+selbst ein und verkabelt die Apps anschließend untereinander. Übrig bleibt,
+was an deinen Konten hängt und sich deshalb nicht skripten lässt.
 
 > Die Adressen unten stehen in der Domain-Form (`https://sonarr.example.com`).
 > Hast du beim Installer keine Domain eingerichtet, nimm stattdessen
@@ -15,17 +15,30 @@ sich nicht sinnvoll skripten lässt.
 sudo ./setup.sh
 ```
 
-In Schritt 9 passiert unter anderem das hier: es startet Sonarr,
-Radarr, Lidarr, Prowlarr, Bazarr und SABnzbd, wartet, bis sie antworten, und
-**liest dann die API-Keys aus deren Konfigurationsdateien aus** (`config.xml`
-bei den *arr-Apps, `sabnzbd.ini` bei SABnzbd, `config.yaml` bei Bazarr). Die
-Werte landen automatisch in der `.env`, und die abhängigen Container werden
-danach mit den frischen Schlüsseln neu gestartet. Das Abtippen von sechs
-Schlüsseln entfällt.
+Schritt 9 startet alles, wartet bis die Dienste antworten, und **liest dann
+die API-Schlüssel aus deren Konfigurationsdateien aus** (`config.xml` bei den
+*arr-Apps, `sabnzbd.ini` bei SABnzbd, `config.yaml` bei Bazarr,
+`Preferences.xml` bei Plex). Die Werte landen in der `.env`.
 
-Ebenfalls automatisch: der Vergleich der Gluetun-IP mit der Host-IP. Sind
-beide gleich, läuft der Torrent-Traffic am Tunnel vorbei, und der Installer
-meldet das als FAIL.
+Mit diesen Schlüsseln richtet es danach ein:
+
+| Bereich | Was eingetragen wird |
+|---|---|
+| Sonarr, Radarr, Lidarr | Stammordner, Download-Clients, Hardlinks, Umbenennen, Extra Files |
+| qBittorrent | Kategorien `tv`, `movies`, `music`, `books` samt Zielpfad, Queueing, festes Passwort |
+| Prowlarr | Verbindung zu allen drei *arr-Apps mit vollem Abgleich |
+| Recyclarr | die deutschen TRaSH-Profile, einmal durchgeschrieben |
+| Plex | Transcode-Ziel `/transcode`, Bibliotheken Filme, Serien, Musik |
+| Bazarr | Sonarr und Radarr, Sprachprofil Deutsch vor Englisch, Synchronisierung |
+| Overseerr | Sonarr und Radarr mit dem deutschen Qualitätsprofil |
+| Tautulli | API freigegeben, damit die Plex-Kachel Zahlen zeigt |
+
+Ebenfalls automatisch: der Vergleich der Gluetun-IP mit der Host-IP, und die
+Gegenprobe, ob ProtonVPN wirklich einen eingehenden Port weiterleitet.
+
+Jeder dieser Schritte prüft vorher, ob es schon eingerichtet ist. Ein zweiter
+Lauf ändert deshalb nichts und überschreibt auch nicht, was du selbst
+angepasst hast.
 
 ## Vier Werte musst du selbst eintragen
 
@@ -43,194 +56,120 @@ trotzdem, und du holst es später mit einem weiteren `sudo ./setup.sh` nach.
 
 Bei ProtonVPN ist das Häkchen bei NAT-PMP der Punkt, an dem es meistens
 schiefgeht. Ohne das bekommt qBittorrent keinen eingehenden Port und seedet
-nur zu Peers, die sich von selbst melden.
+nur zu Peers, die sich von selbst melden. Der Installer meldet das am Ende
+als Problem, statt es stillschweigend zu übergehen — der Tunnel selbst steht
+ja, der Fehler fällt sonst monatelang nicht auf.
 
-## qBittorrent
+## Was im Browser bleibt
 
-Anmelden mit `QBIT_USER` und `QBIT_PASS` aus der `.env`. Das Passwort setzt
-`setup.sh` selbst: es meldet sich einmal mit dem temporären Passwort aus dem
-Log an, vergibt ein festes und schaltet dabei **Bypass authentication for
-clients on localhost** ein.
+Vier Dinge, und alle hängen an einem Konto oder an einer Auswahl, die dir
+niemand abnehmen kann.
 
-Klappt das nicht (etwa weil du vorher schon ein eigenes Passwort gesetzt
-hast), von Hand: temporäres Passwort aus dem Log holen,
+### 1. Suchquellen in Prowlarr
 
-```bash
-docker compose logs qbittorrent | grep -i "temporary password"
-```
+**Indexers → Add Indexer.** Das ist der einzige Schritt, ohne den gar nichts
+gefunden wird. Aufteilung nach [docs/03](03-deutsche-profile.md):
+deutschsprachige Torrent-Quellen mit Priorität 10, Usenet-Indexer mit
+Priorität 25.
 
-und die beiden WebUI-Zeilen unten selbst setzen.
+Nach dem Speichern schiebt Prowlarr jeden Indexer automatisch in Sonarr,
+Radarr und Lidarr — die Verbindung dahin steht schon.
 
-Dann `https://qbit.example.com` und unter **Tools → Options**:
+### 2. Overseerr anmelden
 
-| Bereich | Einstellung | Wert |
-|---|---|---|
-| Downloads | Default Save Path | `/data/torrents` |
-| Downloads | Pre-allocate disk space | aus |
-| BitTorrent | Torrent Queueing | an, max 5 aktive Downloads |
-| WebUI | **Bypass authentication for clients on localhost** | **an** (setzt `setup.sh`) |
-| WebUI | Benutzername und Passwort | setzt `setup.sh`, steht als `QBIT_USER` / `QBIT_PASS` in der `.env` |
+`https://requests.example.com` öffnen und mit dem Plex-Konto anmelden. Sonarr
+und Radarr sind darin bereits eingetragen, samt Stammordner und dem Profil
+`[German] HD Bluray + WEB`.
 
-Der Haken bei **Bypass authentication for clients on localhost** ist nicht
-optional. Gluetun schiebt den weitergeleiteten Port per API-Aufruf von
-`127.0.0.1` hinein. Ohne den Haken scheitert das an der Anmeldung, und dein
-Seeding-Port bleibt zu.
+### 3. Navidrome
 
-Kategorien anlegen, genau so benannt:
+`https://music.example.com`, beim ersten Aufruf das Admin-Konto anlegen. Der
+Rest steht in [docs/08](08-musik.md).
 
-| Kategorie | Save Path |
-|---|---|
-| `tv` | `/data/torrents/tv` |
-| `movies` | `/data/torrents/movies` |
-| `music` | `/data/torrents/music` |
-| `books` | `/data/torrents/books` |
+### 4. SABnzbd, falls du Usenet nutzt
 
-Danach Port-Forwarding prüfen:
+`https://sab.example.com`, Assistent durchlaufen, Zugangsdaten deines
+Anbieters eintragen. Die Download-Clients in Sonarr, Radarr und Lidarr trägt
+der Installer ein, sobald der Schlüssel in der `.env` steht — also beim
+nächsten `sudo ./setup.sh`.
 
-```bash
-docker compose restart gluetun qbittorrent
-docker compose logs gluetun | grep -i "port forward"
-```
-
-Der Wert muss in qBittorrent unter **Options → Connection** als Listening
-Port stehen.
-
-## SABnzbd
-
-`https://sab.example.com`, Assistent durchlaufen, Usenet-Zugangsdaten
-eintragen. Unter **Config → Folders**:
-
-| Feld | Wert |
-|---|---|
-| Temporary Download Folder | `/data/usenet/incomplete` |
-| Completed Download Folder | `/data/usenet/complete` |
-
-Unter **Config → Categories** die vier Kategorien `tv`, `movies`, `music`,
-`books` anlegen, jeweils Folder `/data/usenet/complete/<name>`.
-
+Unter **Config → Folders** gehören Temporary Download Folder auf
+`/data/usenet/incomplete` und Completed Download Folder auf
+`/data/usenet/complete`, unter **Config → Categories** die vier Kategorien
+`tv`, `movies`, `music`, `books` mit Folder `/data/usenet/complete/<name>`.
 Unter **Config → Switches** lohnt **Direct Unpack**, das entpackt parallel
 zum Download statt danach.
 
-## Prowlarr
+### Und Paperless
 
-**Settings → Apps**, je eine Verbindung. Adressen aus Sicht der Container:
+`https://paperless.example.com`, Anmeldung mit `PAPERLESS_ADMIN_USER` und
+`PAPERLESS_ADMIN_PASSWORD` aus der `.env`, beides hat der Installer erzeugt.
+OneDrive verbinden: [docs/06](06-paperless-onedrive.md).
 
-| App | Prowlarr Server | App Server |
+## Plex und die Hardware
+
+Plex ist mit deinem Konto verbunden, die drei Bibliotheken stehen, und das
+Umrechnen läuft über `/transcode`, also über den Arbeitsspeicher statt über
+die SSD.
+
+**Hardwarebeschleunigtes Umrechnen ist eine Plex-Pass-Funktion.** Ohne Abo
+rechnet Plex per CPU, auch wenn die Einstellung gesetzt ist und die
+Grafikeinheit durchgereicht wurde. Ob dein Rechner überhaupt eine nutzbare
+hat, sagt dir `setup.sh` in Schritt 1; wenn nicht, hilft
+[docs/04](04-hardware.md).
+
+## Wenn du doch von Hand ran musst
+
+Der Installer trägt nichts ein, was schon dasteht. Hast du selbst etwas
+angepasst, bleibt es. Umgekehrt: ist ein Schritt fehlgeschlagen, steht er am
+Ende in der Problemliste, und ein erneutes `sudo ./setup.sh` holt ihn nach.
+
+Für den Fall, dass du es selbst machen willst, die Werte:
+
+**Download-Clients** (Settings → Download Clients → +):
+
+| Feld | qBittorrent | SABnzbd |
 |---|---|---|
-| Sonarr | `http://prowlarr:9696` | `http://sonarr:8989` |
-| Radarr | `http://prowlarr:9696` | `http://radarr:7878` |
-| Lidarr | `http://prowlarr:9696` | `http://lidarr:8686` |
-
-Die API-Keys stehen schon in der `.env`, du kannst sie von dort kopieren.
-
-Dann **Indexers → Add Indexer**. Aufteilung nach
-[docs/03](03-deutsche-profile.md): deutschsprachige Torrent-Quellen mit
-Priorität 10, die beiden Usenet-Indexer mit Priorität 25.
-
-Nach dem Speichern werden die Indexer automatisch in alle drei Apps
-geschoben.
-
-## Download-Clients in Sonarr, Radarr und Lidarr
-
-Jeweils **Settings → Download Clients → +**.
-
-**qBittorrent**, und hier scheitern die meisten:
-
-| Feld | Wert |
-|---|---|
-| Host | **`gluetun`** |
-| Port | `8080` |
-| Username / Password | wie in qBittorrent gesetzt |
-| Category | `tv` bzw. `movies` bzw. `music` |
+| Host | **`gluetun`** | `sabnzbd` |
+| Port | `8080` | `8080` (containerintern, nicht 8081) |
+| Zugang | `QBIT_USER` / `QBIT_PASS` aus der `.env` | API-Key aus der `.env` |
+| Category | `tv` bzw. `movies` bzw. `music` | dieselben |
 
 Nicht `qbittorrent` als Host eintragen. Der Container hat kein eigenes Netz,
 er lebt im Namespace von Gluetun. Unter dem Namen `qbittorrent` existiert im
 Docker-Netz nichts.
 
-**SABnzbd:**
+**Stammordner:** Sonarr `/data/media/tv`, Radarr `/data/media/movies`,
+Lidarr `/data/media/music`.
 
-| Feld | Wert |
-|---|---|
-| Host | `sabnzbd` |
-| Port | `8080` (containerintern, nicht 8081) |
-| API Key | aus der `.env` |
-| Category | `tv` bzw. `movies` bzw. `music` |
+**qBittorrent-Kategorien:** `tv`, `movies`, `music`, `books`, jeweils mit
+Save Path `/data/torrents/<name>`.
 
-## Root-Folder und Medienverwaltung
+**Prowlarr → Apps:** Prowlarr Server `http://prowlarr:9696`, App Server
+`http://sonarr:8989` bzw. `:7878` bzw. `:8686`.
 
-| App | Root Folder |
-|---|---|
-| Sonarr | `/data/media/tv` |
-| Radarr | `/data/media/movies` |
-| Lidarr | `/data/media/music` |
+**Medienverwaltung:** Use Hardlinks an, Import Extra Files `srt,sub,idx`,
+Rename an.
 
-Unter **Settings → Media Management** aktivieren:
-
-- **Use Hardlinks instead of Copy**: an
-- **Import Extra Files**: `srt,sub,idx`
-- **Rename Episodes / Movies**: an
-
-## Plex
-
-`http://<server>:32400/web`. Bibliotheken:
-
-| Bibliothek | Typ | Ordner | Sprache |
-|---|---|---|---|
-| Filme | Movies | `/data/media/movies` | Deutsch |
-| Serien | TV Shows | `/data/media/tv` | Deutsch |
-| Musik | Music | `/data/media/music` | Deutsch |
-
-**Einstellungen → Transcoder:**
-
-- Hardwarebeschleunigte Kodierung verwenden: **an**
-- Transcoder temporary directory: `/transcode`
-
-Ohne das Häkchen transcodiert Plex per CPU, obwohl die GPU durchgereicht ist.
-
-Plex-Token für Kometa und Tautulli: bei einem Medium **Get Info → View XML**,
-in der URL steht `X-Plex-Token=...`. Wert als `PLEX_TOKEN` in die `.env`.
-
-## Overseerr
-
-`https://requests.example.com`, Anmeldung mit dem Plex-Konto. Dann Sonarr und
-Radarr verbinden, dasselbe Muster: `http://sonarr:8989` mit dem API-Key,
-Quality Profile `[German] HD Bluray + WEB`, Root Folder `/data/media/tv`.
-
-Den API-Key von Overseerr selbst findest du unter **Settings → General**, er
-gehört als `OVERSEERR_API_KEY` in die `.env`, damit das Homepage-Widget
-funktioniert.
-
-## Bazarr
-
-**Settings → Sonarr** und **→ Radarr** mit den Container-Adressen verbinden.
-Unter **Settings → Languages** ein Profil mit Deutsch auf Position 1 und
-Englisch auf Position 2 anlegen, Cutoff auf Deutsch, als Default setzen.
-
-Unter **Settings → Subtitles**: **Use embedded subtitles** und **Automatic
-Subtitles Synchronization** einschalten.
-
-## Paperless
-
-`https://paperless.example.com`. Anmeldung mit `PAPERLESS_ADMIN_USER` und
-`PAPERLESS_ADMIN_PASSWORD` aus der `.env`, beides hat der Installer erzeugt.
-
-OneDrive verbinden: [docs/06](06-paperless-onedrive.md).
-
-## Navidrome
-
-`https://music.example.com`, beim ersten Aufruf das Admin-Konto anlegen. Der
-Rest steht in [docs/08](08-musik.md).
-
-## Profile schreiben
+**Qualitätsprofile** neu schreiben:
 
 ```bash
 docker compose run --rm recyclarr sync --preview   # zeigt nur
 docker compose run --rm recyclarr sync             # schreibt
 ```
 
-Die Feineinstellung für „Deutsch bevorzugt, Englisch als Fallback" steht in
-[docs/03](03-deutsche-profile.md) und ist nicht optional. Ohne sie bevorzugen
-Sonarr und Radarr weiter englische Releases.
+**qBittorrent-Passwort**, falls der Installer es nicht setzen konnte (etwa
+weil du vorher schon eines vergeben hast): temporäres Passwort aus dem Log
+holen und die beiden WebUI-Zeilen selbst setzen.
+
+```bash
+docker compose logs qbittorrent | grep -i "temporary password"
+```
+
+Der Haken bei **Bypass authentication for clients on localhost** ist dabei
+nicht optional. Gluetun schiebt den weitergeleiteten Port per API-Aufruf von
+`127.0.0.1` hinein. Ohne den Haken scheitert das an der Anmeldung, und dein
+Seeding-Port bleibt zu.
 
 ## Stolperfallen, kurz gefasst
 
@@ -241,8 +180,11 @@ Sonarr und Radarr weiter englische Releases.
 | Import kopiert statt zu verlinken | zwei Mounts statt einem `/data` |
 | Seeding-Port bleibt zu | Localhost-Bypass fehlt oder NAT-PMP war nicht aktiv |
 | „Permission denied" beim Import | `PUID`/`PGID` passen nicht zu `/mnt/data` |
-| Plex transcodiert per CPU | Häkchen in Plex nicht gesetzt oder `RENDER_GID` falsch |
+| Plex rechnet per CPU | kein Plex Pass, oder `RENDER_GID` falsch |
 | Homepage zeigt „Bad Request" | Hostname fehlt in `HOMEPAGE_ALLOWED_HOSTS` |
 | Caddy startet nicht | `TAILSCALE_IP` leer, Tailscale war beim `--prepare` nicht verbunden |
 | Lidarr hat kein Plugins-Menü | Container nicht auf dem `develop`-Tag |
 | Scans erscheinen nicht in Paperless | `/etc/rclone/rclone.conf` fehlt oder ist veraltet |
+| Bazarr lädt keine Untertitel | Sprachprofil fehlt; Bazarr meldet dabei keinen Fehler |
+| Recyclarr schreibt nichts, endet aber mit 0 | zwei Instanzen gleich benannt, siehe `recyclarr/recyclarr.yml` |
+| Paperless antwortet mit 500 | `config/paperless-db` oder `-redis` wurden umgechownt |

@@ -51,7 +51,7 @@ nötig sind.
 | 6 | Torrents über ProtonVPN und Usenet (beide optional) |
 | 7 | Paperless-Dokumentenarchiv (optional) |
 | 8 | Plex mit deinem Konto verbinden |
-| 9 | Alles starten, **API-Schlüssel selbst einsammeln**, VPN gegenprüfen |
+| 9 | Alles starten, **API-Schlüssel einsammeln**, **die Apps untereinander verkabeln**, VPN und Portweiterleitung gegenprüfen |
 
 Schritt 2 ist der einzige, der hart abbricht. Können auf dem gewählten Pfad
 keine Hardlinks angelegt werden, würde jeder fertige Download kopiert statt
@@ -61,6 +61,16 @@ sofort. NTFS, exFAT und Netzlaufwerke können das nicht.
 Schritt 9 erspart dir das Abtippen von sechs API-Schlüsseln. Die Apps legen
 sie beim ersten Start selbst an, das Skript liest sie aus deren
 Konfigurationsdateien und trägt sie ein.
+
+Mit denselben Schlüsseln verkabelt es die Apps anschließend untereinander:
+Download-Clients in Sonarr, Radarr und Lidarr (mit Host `gluetun`, der
+häufigsten Fehlerquelle überhaupt), die Kategorien in qBittorrent, Hardlinks
+und Umbenennen, Prowlarr an alle drei Apps, die deutschen Qualitätsprofile,
+Plex-Bibliotheken samt Transcode-Ziel, das Bazarr-Sprachprofil Deutsch vor
+Englisch und Overseerr an Sonarr und Radarr. Was im Browser bleibt, sind vier
+Dinge, die niemand skripten kann: die Auswahl deiner Suchquellen in Prowlarr,
+die Anmeldung von Overseerr an deinem Plex-Konto, das Admin-Konto in
+Navidrome und, falls du Usenet nutzt, die Zugangsdaten deines Anbieters.
 
 ## Was drin ist
 

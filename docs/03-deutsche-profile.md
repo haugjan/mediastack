@@ -119,6 +119,11 @@ englischsprachigem Material liefert Usenet in voller Geschwindigkeit.
 
 ## Schritt 5: Bazarr auf zwei Sprachen
 
+> Das legt `setup.sh` inzwischen selbst an, samt Verbindung zu Sonarr und
+> Radarr. Die Tabelle unten beschreibt, was dabei herauskommt — und wie du
+> es von Hand nachbaust, falls du ein eigenes Profil willst. Ein vorhandenes
+> Profil rührt der Installer nicht an.
+
 **Settings → Languages → Add Language Profile:**
 
 | Position | Sprache | Forced | HI |

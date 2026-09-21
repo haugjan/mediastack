@@ -71,7 +71,7 @@ darauf an.
 
 ## setup.sh
 
-1090 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
+Rund 1500 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
 
 - `set -uo pipefail`, **`set -e` ist mit Absicht nicht gesetzt**: ein
   fehlgeschlagener optionaler Schritt darf die Installation nicht abbrechen.
@@ -92,6 +92,20 @@ darauf an.
   aus `homepage/services.yaml.tmpl` gegen `setup.sh` gegenprüft.
 - Schritt 9 sammelt die API-Schlüssel selbst aus den Konfigurationsdateien
   der Apps ein. Nichts abtippen lassen, was auslesbar ist.
+- Schritt 9 verkabelt die Apps anschließend über ihre eigenen APIs
+  (Download-Clients, Prowlarr, Plex, Bazarr, Overseerr). Zwei Python-Helfer
+  im Heredoc erledigen das Muster „Schema holen, Feld ändern,
+  zurückschicken", statt JSON von Hand zu bauen — das überlebt App-Updates.
+  Jeder Aufruf gibt **3** zurück, wenn schon alles stand: nur so kann die
+  Ausgabe zwischen „eingetragen" und „war schon da" unterscheiden.
+- Was `setup.sh` einträgt, ist immer die **containerinterne** Adresse
+  (`http://sonarr:8989`, für qBittorrent `gluetun:8080`). Was es selbst
+  aufruft, geht über `localhost:<veröffentlichter Port>`.
+- `config/paperless-db` und `config/paperless-redis` sind vom rekursiven
+  `chown` ausgenommen. Postgres (uid 70) und Redis (uid 999) richten ihre
+  Ordner selbst ein; nimmt man sie mit, verlieren sie die Rechte an ihren
+  eigenen Dateien und Paperless antwortet mit 500 — bei weiterhin grünem
+  Healthcheck, weil `pg_isready` nur den Socket prüft.
 
 ## .env
 

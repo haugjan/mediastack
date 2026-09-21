@@ -1077,6 +1077,381 @@ if (( USE_TORRENT )) && [[ -z $(env_get QBIT_PASS 2>/dev/null || true) ]]; then
 fi
 (( FOUND )) && docker compose up -d --force-recreate recyclarr unpackerr backfill homepage >>"$LOG" 2>&1
 
+# =========================================================================
+# Apps untereinander verkabeln
+#
+# Alles ab hier stand frueher in docs/02-inbetriebnahme.md als Handarbeit.
+# Jeder Schritt prueft erst, ob es schon eingerichtet ist, und macht dann
+# nichts. Deshalb darf setup.sh beliebig oft laufen.
+#
+# Die Adressen sind zweierlei Art, das ist die haeufigste Fehlerquelle:
+#   - setup.sh selbst spricht die Apps ueber localhost:<veroeffentlichter
+#     Port> an, es laeuft ja auf dem Host.
+#   - Was die Apps EINANDER eintragen, sind Container-Namen und die
+#     INTERNEN Ports: http://sonarr:8989, und fuer qBittorrent gluetun:8080,
+#     weil der Container kein eigenes Netz hat.
+# =========================================================================
+API_TMP="$(mktemp -d)"
+trap 'rm -rf "$API_TMP"' EXIT
+
+# Legt eine Ressource in einer *arr-App an (Download-Client, Prowlarr-App).
+# Holt dafuer das Schema der App und aendert nur die genannten Felder,
+# statt JSON von Hand zu bauen: so ueberlebt es Feldwechsel bei Updates.
+cat >"$API_TMP/add.py" <<'PY'
+import json, sys, urllib.error, urllib.request
+
+base, key, endpoint, impl, extra, fields = sys.argv[1:7]
+want = dict(p.split("=", 1) for p in fields.split("\x1f") if p)
+
+def call(path, data=None):
+    req = urllib.request.Request(base + path)
+    req.add_header("X-Api-Key", key)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+        data = json.dumps(data).encode()
+    with urllib.request.urlopen(req, data, timeout=60) as r:
+        return json.loads(r.read() or "null")
+
+try:
+    for c in call("/" + endpoint):
+        if c.get("implementation") == impl:
+            print("schon vorhanden"); sys.exit(3)
+    schema = next(s for s in call("/" + endpoint + "/schema")
+                  if s.get("implementation") == impl)
+except (urllib.error.URLError, StopIteration) as e:
+    sys.exit("nicht erreichbar: %s" % e)
+
+for f in schema["fields"]:
+    if f["name"] in want:
+        v, old = want[f["name"]], f.get("value")
+        # Den Typ aus dem Schema uebernehmen, sonst lehnt die App den Wert ab.
+        if isinstance(old, bool):  v = v.lower() in ("1", "true", "ja")
+        elif isinstance(old, int): v = int(v)
+        f["value"] = v
+schema.update(json.loads(extra))
+schema.pop("id", None)
+try:
+    call("/" + endpoint, schema)
+except urllib.error.HTTPError as e:
+    # Die App prueft die Verbindung beim Anlegen. Ein Fehler hier heisst
+    # fast immer: Adresse, Port oder Zugangsdaten stimmen nicht.
+    sys.exit("abgelehnt (%s): %s" % (e.code, e.read().decode()[:300]))
+PY
+
+# Aendert einen Konfigurationsabschnitt (Medienverwaltung, Umbenennen).
+cat >"$API_TMP/cfg.py" <<'PY'
+import json, sys, urllib.error, urllib.request
+
+base, key, section, changes = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
+
+def call(path, data=None, method="GET"):
+    req = urllib.request.Request(base + path, method=method)
+    req.add_header("X-Api-Key", key)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+        data = json.dumps(data).encode()
+    with urllib.request.urlopen(req, data, timeout=30) as r:
+        return json.loads(r.read() or "null")
+
+try:
+    cur = call("/config/" + section)
+except urllib.error.URLError as e:
+    sys.exit("nicht erreichbar: %s" % e)
+todo = {k: v for k, v in changes.items() if k in cur and cur[k] != v}
+if not todo:
+    print("schon gesetzt"); sys.exit(3)
+cur.update(todo)
+try:
+    call("/config/%s/%s" % (section, cur["id"]), cur, "PUT")
+except urllib.error.HTTPError as e:
+    sys.exit("abgelehnt (%s): %s" % (e.code, e.read().decode()[:200]))
+PY
+
+US=$'\x1f'   # Trennzeichen fuer die Feldliste, kommt in Werten nicht vor
+
+arr_add() { python3 "$API_TMP/add.py" "$@" >>"$LOG" 2>&1; }
+arr_cfg() { python3 "$API_TMP/cfg.py" "$@" >>"$LOG" 2>&1; }
+
+# Wartet, bis eine App ihre API beantwortet. Ohne das laufen die ersten
+# Aufrufe ins Leere, wenn die Container gerade erst gestartet sind.
+api_ready() {
+	local port="$1" api="$2" key="$3" i
+	[[ -n $key ]] || return 1
+	for i in $(seq 1 30); do
+		curl -fsS -o /dev/null --max-time 5 -H "X-Api-Key: $key" \
+			"http://localhost:$port/api/$api/system/status" 2>/dev/null && return 0
+		sleep 2
+	done
+	return 1
+}
+
+SONARR_KEY="$(env_get SONARR_API_KEY 2>/dev/null || true)"
+RADARR_KEY="$(env_get RADARR_API_KEY 2>/dev/null || true)"
+LIDARR_KEY="$(env_get LIDARR_API_KEY 2>/dev/null || true)"
+
+# --- qBittorrent: Kategorien und Zielpfade
+# Die vier Kategorien muessen genau so heissen, die *arr-Apps tragen sie
+# beim Download-Client als Ziel ein. Legt eine App sie selbst an, fehlt
+# ihnen der Pfad, deshalb bei 409 zusaetzlich editCategory.
+if (( USE_TORRENT )) && [[ -n $(env_get QBIT_PASS 2>/dev/null || true) ]]; then
+	qjar="$(mktemp)"
+	if [[ $(curl -sS -o /dev/null -w '%{http_code}' -c "$qjar" --max-time 10 \
+		--data-urlencode "username=$(env_get QBIT_USER)" \
+		--data-urlencode "password=$(env_get QBIT_PASS)" \
+		http://localhost:8080/api/v2/auth/login 2>>"$LOG") == 20[04] ]]; then
+		for cat in tv movies music books; do
+			c=$(curl -sS -o /dev/null -w '%{http_code}' -b "$qjar" --max-time 10 \
+				--data-urlencode "category=$cat" \
+				--data-urlencode "savePath=/data/torrents/$cat" \
+				http://localhost:8080/api/v2/torrents/createCategory 2>>"$LOG")
+			[[ $c == 409 ]] && curl -sS -o /dev/null -b "$qjar" --max-time 10 \
+				--data-urlencode "category=$cat" \
+				--data-urlencode "savePath=/data/torrents/$cat" \
+				http://localhost:8080/api/v2/torrents/editCategory >>"$LOG" 2>&1
+		done
+		# Vorbelegen kostet bei Hardlinks nur Zeit, Queueing verhindert,
+		# dass zwanzig Downloads gleichzeitig die Leitung teilen.
+		curl -sS -o /dev/null -b "$qjar" --max-time 10 \
+			--data-urlencode 'json={"save_path":"/data/torrents","preallocate_all":false,"queueing_enabled":true,"max_active_downloads":5,"max_active_uploads":5,"max_active_torrents":10}' \
+			http://localhost:8080/api/v2/app/setPreferences >>"$LOG" 2>&1
+		ok "qBittorrent: Kategorien und Zielpfade gesetzt"
+	else
+		note "qBittorrent antwortet nicht, Kategorien nicht gesetzt"
+	fi
+	rm -f "$qjar"
+fi
+
+# --- Download-Clients in Sonarr, Radarr und Lidarr
+# Host ist gluetun, NICHT qbittorrent: der Container teilt sich den
+# Netzwerk-Namespace mit gluetun, unter eigenem Namen existiert er nicht.
+CLIENTS=0; CLIENTS_DA=0
+if (( USE_TORRENT )) && [[ -n $(env_get QBIT_PASS 2>/dev/null || true) ]]; then
+	qu="$(env_get QBIT_USER)"; qp="$(env_get QBIT_PASS)"
+	for spec in "8989${US}v3${US}$SONARR_KEY${US}tvCategory${US}tv" \
+	            "7878${US}v3${US}$RADARR_KEY${US}movieCategory${US}movies" \
+	            "8686${US}v1${US}$LIDARR_KEY${US}musicCategory${US}music"; do
+		IFS="$US" read -r port api key catfield cat <<<"$spec"
+		[[ -n $key ]] || continue
+		if arr_add "http://localhost:$port/api/$api" "$key" downloadclient QBittorrent \
+			'{"name":"qBittorrent","enable":true,"priority":1,"removeCompletedDownloads":true,"removeFailedDownloads":true}' \
+			"host=gluetun${US}port=8080${US}username=${qu}${US}password=${qp}${US}${catfield}=${cat}"
+		then CLIENTS=$((CLIENTS+1))
+		elif [[ $? == 3 ]]; then CLIENTS_DA=$((CLIENTS_DA+1))
+		fi
+	done
+fi
+if (( USE_USENET )) && [[ -n $(env_get SABNZBD_API_KEY 2>/dev/null || true) ]]; then
+	sk="$(env_get SABNZBD_API_KEY)"
+	for spec in "8989${US}v3${US}$SONARR_KEY${US}tvCategory${US}tv" \
+	            "7878${US}v3${US}$RADARR_KEY${US}movieCategory${US}movies" \
+	            "8686${US}v1${US}$LIDARR_KEY${US}musicCategory${US}music"; do
+		IFS="$US" read -r port api key catfield cat <<<"$spec"
+		[[ -n $key ]] || continue
+		# Port 8080 ist der INTERNE Port von SABnzbd, nicht die 8081,
+		# unter der es auf dem Host veroeffentlicht ist.
+		if arr_add "http://localhost:$port/api/$api" "$key" downloadclient Sabnzbd \
+			'{"name":"SABnzbd","enable":true,"priority":1,"removeCompletedDownloads":true,"removeFailedDownloads":true}' \
+			"host=sabnzbd${US}port=8080${US}apiKey=${sk}${US}${catfield}=${cat}"
+		then CLIENTS=$((CLIENTS+1))
+		elif [[ $? == 3 ]]; then CLIENTS_DA=$((CLIENTS_DA+1))
+		fi
+	done
+fi
+if (( CLIENTS )); then
+	ok "$CLIENTS Download-Clients eingetragen"
+elif (( CLIENTS_DA )); then
+	ok "Download-Clients stehen bereits"
+fi
+
+# --- Medienverwaltung: hardlinken statt kopieren, umbenennen, Untertitel
+# Ohne importExtraFiles bleiben fertig heruntergeladene .srt-Dateien im
+# Download-Ordner liegen, statt neben dem Film zu landen.
+MM='{"copyUsingHardlinks":true,"importExtraFiles":true,"extraFileExtensions":"srt,sub,idx"}'
+MMOK=0; MMDA=0
+for spec in "8989${US}v3${US}$SONARR_KEY${US}renameEpisodes" \
+	            "7878${US}v3${US}$RADARR_KEY${US}renameMovies" \
+	            "8686${US}v1${US}$LIDARR_KEY${US}renameTracks"; do
+	IFS="$US" read -r port api key renamekey <<<"$spec"
+	[[ -n $key ]] || continue
+	arr_cfg "http://localhost:$port/api/$api" "$key" mediamanagement "$MM"; c1=$?
+	arr_cfg "http://localhost:$port/api/$api" "$key" naming "{\"$renamekey\":true}"; c2=$?
+	# 0 = geaendert, 3 = war schon so. Alles andere ist ein echter Fehler.
+	if [[ $c1 == 0 || $c2 == 0 ]]; then MMOK=$((MMOK+1))
+	elif [[ $c1 == 3 && $c2 == 3 ]]; then MMDA=$((MMDA+1))
+	fi
+done
+if (( MMOK )); then
+	ok "Hardlinks und Umbenennen in $MMOK Apps gesetzt"
+elif (( MMDA )); then
+	ok "Hardlinks und Umbenennen stehen bereits"
+fi
+
+# --- Prowlarr mit den drei Apps verbinden
+# Danach schiebt Prowlarr jeden neu angelegten Indexer automatisch in
+# Sonarr, Radarr und Lidarr. Ohne das traegt man ihn dreimal von Hand ein.
+PKEY="$(env_get PROWLARR_API_KEY 2>/dev/null || true)"
+if [[ -n $PKEY ]] && api_ready 9696 v1 "$PKEY"; then
+	APPS=0; APPS_DA=0
+	for spec in "Sonarr${US}sonarr${US}8989${US}$SONARR_KEY" \
+	            "Radarr${US}radarr${US}7878${US}$RADARR_KEY" \
+	            "Lidarr${US}lidarr${US}8686${US}$LIDARR_KEY"; do
+		IFS="$US" read -r impl host port key <<<"$spec"
+		[[ -n $key ]] || continue
+		if arr_add "http://localhost:9696/api/v1" "$PKEY" applications "$impl" \
+			"{\"name\":\"$impl\",\"syncLevel\":\"fullSync\"}" \
+			"prowlarrUrl=http://prowlarr:9696${US}baseUrl=http://${host}:${port}${US}apiKey=${key}"
+		then APPS=$((APPS+1))
+		elif [[ $? == 3 ]]; then APPS_DA=$((APPS_DA+1))
+		fi
+	done
+	if (( APPS )); then
+		ok "Prowlarr an $APPS Apps angebunden"
+	elif (( APPS_DA )); then
+		ok "Prowlarr ist bereits angebunden"
+	fi
+fi
+
+# --- Qualitaetsprofile schreiben
+# Muss VOR Overseerr laufen, sonst gibt es das deutsche Profil noch nicht,
+# auf das Overseerr zeigen soll.
+if [[ -n $SONARR_KEY && -n $RADARR_KEY ]]; then
+	info "Deutsche Qualitaetsprofile schreiben, das dauert ein bis zwei Minuten"
+	if docker compose run --rm recyclarr sync >>"$LOG" 2>&1; then
+		ok "Qualitaetsprofile geschrieben (Recyclarr)"
+	else
+		note "Recyclarr lief nicht durch. Von Hand: docker compose run --rm recyclarr sync"
+	fi
+fi
+
+# --- Plex: Token einsammeln, Transcode-Ziel und Bibliotheken
+# Den Token musstest du frueher im Browser aus einer XML-Ansicht abschreiben.
+# Er steht in Plex' eigener Konfigurationsdatei, sobald der Server einmal
+# mit deinem Konto verbunden war.
+PLEX_TOKEN_VAL="$(env_get PLEX_TOKEN 2>/dev/null || true)"
+if [[ -z $PLEX_TOKEN_VAL ]]; then
+	PLEX_TOKEN_VAL="$(docker exec plex cat \
+		'/config/Library/Application Support/Plex Media Server/Preferences.xml' 2>/dev/null \
+		| sed -n 's/.*PlexOnlineToken="\([^"]*\)".*/\1/p')"
+	if [[ -n $PLEX_TOKEN_VAL ]]; then
+		env_set PLEX_TOKEN "$PLEX_TOKEN_VAL"
+		env_set PLEX_URL "http://localhost:32400"
+		ok "Plex-Token uebernommen (Tautulli und Kometa brauchen ihn)"
+	fi
+fi
+if [[ -n $PLEX_TOKEN_VAL ]]; then
+	# /transcode ist die RAM-Disk aus compose.yaml. Ohne diese Einstellung
+	# schreibt Plex jeden Umrechenvorgang auf die SSD.
+	curl -sS -o /dev/null --max-time 10 -X PUT -H "X-Plex-Token: $PLEX_TOKEN_VAL" \
+		--get --data-urlencode 'TranscoderTempDirectory=/transcode' \
+		http://localhost:32400/:/prefs >>"$LOG" 2>&1 \
+		&& ok "Plex: Umrechnen laeuft ueber den Arbeitsspeicher"
+
+	# Bibliotheken anlegen, die es noch nicht gibt. Agent und Scanner
+	# muessen zusammenpassen, sonst antwortet Plex mit
+	# "new scanner needs to be paired with new agent".
+	have="$(curl -fsS --max-time 10 -H "X-Plex-Token: $PLEX_TOKEN_VAL" \
+		http://localhost:32400/library/sections 2>>"$LOG" \
+		| sed -n 's/.*<Location[^>]*path="\([^"]*\)".*/\1/p')"
+	LIBS=0
+	for spec in "Filme${US}movie${US}tv.plex.agents.movie${US}Plex Movie${US}/data/media/movies" \
+	            "Serien${US}show${US}tv.plex.agents.series${US}Plex TV Series${US}/data/media/tv" \
+	            "Musik${US}artist${US}tv.plex.agents.music${US}Plex Music${US}/data/media/music"; do
+		IFS="$US" read -r name type agent scanner path <<<"$spec"
+		grep -qxF "$path" <<<"$have" && continue
+		curl -sS -o /dev/null --max-time 30 -X POST -H "X-Plex-Token: $PLEX_TOKEN_VAL" \
+			--get --data-urlencode "name=$name" --data-urlencode "type=$type" \
+			--data-urlencode "agent=$agent" --data-urlencode "scanner=$scanner" \
+			--data-urlencode 'language=de-DE' --data-urlencode "location=$path" \
+			http://localhost:32400/library/sections >>"$LOG" 2>&1 && LIBS=$((LIBS+1))
+	done
+	(( LIBS )) && ok "$LIBS Plex-Bibliotheken angelegt"
+fi
+
+# --- Bazarr: Verbindungen und das Sprachprofil
+# Ohne Sprachprofil laedt Bazarr NICHTS und meldet dabei keinen Fehler.
+# Die API nimmt Formularfelder, kein JSON, und die Profile liegen unter
+# einem eigenen Endpunkt, nicht in den Einstellungen.
+BKEY="$(env_get BAZARR_API_KEY 2>/dev/null || true)"
+if [[ -n $BKEY && -n $SONARR_KEY && -n $RADARR_KEY ]]; then
+	bz() { curl -sS -o /dev/null -w '%{http_code}' --max-time 25 -X POST \
+		-H "X-API-KEY: $BKEY" "$@" http://localhost:6767/api/system/settings 2>>"$LOG"; }
+	if [[ $(bz --data-urlencode 'settings-general-use_sonarr=true' \
+		--data-urlencode 'settings-sonarr-ip=sonarr' \
+		--data-urlencode 'settings-sonarr-port=8989' \
+		--data-urlencode "settings-sonarr-apikey=$SONARR_KEY" \
+		--data-urlencode 'settings-general-use_radarr=true' \
+		--data-urlencode 'settings-radarr-ip=radarr' \
+		--data-urlencode 'settings-radarr-port=7878' \
+		--data-urlencode "settings-radarr-apikey=$RADARR_KEY") == 2?? ]]; then
+
+		# Nur anlegen, wenn noch kein Profil existiert: sonst wuerden
+		# eigene Aenderungen bei jedem Lauf ueberschrieben.
+		if ! curl -fsS --max-time 10 -H "X-API-KEY: $BKEY" \
+			http://localhost:6767/api/system/languages/profiles 2>>"$LOG" | grep -q '"profileId"'; then
+			# cutoff zeigt auf Position 1 (Deutsch): sind deutsche
+			# Untertitel da, hoert Bazarr auf zu suchen.
+			bz --data-urlencode 'languages-profiles=[{"profileId":1,"name":"Deutsch, Englisch","items":[{"id":1,"language":"de","audio_exclude":"False","hi":"False","forced":"False"},{"id":2,"language":"en","audio_exclude":"False","hi":"False","forced":"False"}],"cutoff":1,"mustContain":[],"mustNotContain":[],"originalFormat":false,"tag":null}]' \
+				--data-urlencode 'settings-general-serie_default_enabled=true' \
+				--data-urlencode 'settings-general-serie_default_profile=1' \
+				--data-urlencode 'settings-general-movie_default_enabled=true' \
+				--data-urlencode 'settings-general-movie_default_profile=1' \
+				--data-urlencode 'settings-general-use_embedded_subs=true' \
+				--data-urlencode 'settings-subsync-use_subsync=true' >>"$LOG" 2>&1
+			# Die Sprachen selbst schaltet Bazarr ueber ein eigenes Feld
+			# frei. Fehlt das, steht das Profil da, wird aber nicht benutzt.
+			bz -d 'languages-enabled=de' -d 'languages-enabled=en' >>"$LOG" 2>&1
+			ok "Bazarr: Deutsch vor Englisch, Synchronisierung an"
+		else
+			ok "Bazarr: Verbindungen gesetzt, Sprachprofil war schon da"
+		fi
+	else
+		note "Bazarr antwortet nicht. Von Hand: docs/03-deutsche-profile.md"
+	fi
+fi
+
+# --- Overseerr an Sonarr und Radarr
+# Die Anmeldung mit dem Plex-Konto bleibt Handarbeit, die Verbindungen
+# dahinter nicht. Overseerr nimmt seine API schon vor dem Assistenten an.
+OKEY="$(env_get OVERSEERR_API_KEY 2>/dev/null || true)"
+if [[ -n $OKEY && -n $SONARR_KEY && -n $RADARR_KEY ]]; then
+	# Das deutsche Profil von Recyclarr suchen, sonst das erste beste.
+	prof_id() {
+		curl -fsS --max-time 10 -H "X-Api-Key: $2" "http://localhost:$1/api/$3/qualityprofile" 2>>"$LOG" \
+			| python3 -c 'import json,sys
+d=json.load(sys.stdin)
+g=[p for p in d if "German" in p["name"]]
+print((g or d or [{"id":""}])[0]["id"])' 2>>"$LOG"
+	}
+	prof_name() {
+		curl -fsS --max-time 10 -H "X-Api-Key: $2" "http://localhost:$1/api/$3/qualityprofile" 2>>"$LOG" \
+			| python3 -c 'import json,sys
+d=json.load(sys.stdin)
+g=[p for p in d if "German" in p["name"]]
+print((g or d or [{"name":""}])[0]["name"])' 2>>"$LOG"
+	}
+	ov_post() {
+		curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X POST \
+			-H "X-Api-Key: $OKEY" -H 'Content-Type: application/json' -d "$2" \
+			"http://localhost:5055/api/v1/settings/$1" 2>>"$LOG"
+	}
+	OVOK=0
+	if ! curl -fsS --max-time 10 -H "X-Api-Key: $OKEY" \
+		http://localhost:5055/api/v1/settings/sonarr 2>>"$LOG" | grep -q '"hostname"'; then
+		sid="$(prof_id 8989 "$SONARR_KEY" v3)"; sname="$(prof_name 8989 "$SONARR_KEY" v3)"
+		[[ -n $sid ]] && [[ $(ov_post sonarr "{\"name\":\"Sonarr\",\"hostname\":\"sonarr\",\"port\":8989,\"apiKey\":\"$SONARR_KEY\",\"useSsl\":false,\"baseUrl\":\"\",\"activeProfileId\":$sid,\"activeProfileName\":\"$sname\",\"activeDirectory\":\"/data/media/tv\",\"activeLanguageProfileId\":1,\"is4k\":false,\"isDefault\":true,\"enableSeasonFolders\":true,\"syncEnabled\":true,\"preventSearch\":false,\"tagRequests\":false}") == 2?? ]] && OVOK=$((OVOK+1))
+	fi
+	if ! curl -fsS --max-time 10 -H "X-Api-Key: $OKEY" \
+		http://localhost:5055/api/v1/settings/radarr 2>>"$LOG" | grep -q '"hostname"'; then
+		rid="$(prof_id 7878 "$RADARR_KEY" v3)"; rname="$(prof_name 7878 "$RADARR_KEY" v3)"
+		[[ -n $rid ]] && [[ $(ov_post radarr "{\"name\":\"Radarr\",\"hostname\":\"radarr\",\"port\":7878,\"apiKey\":\"$RADARR_KEY\",\"useSsl\":false,\"baseUrl\":\"\",\"activeProfileId\":$rid,\"activeProfileName\":\"$rname\",\"activeDirectory\":\"/data/media/movies\",\"is4k\":false,\"isDefault\":true,\"minimumAvailability\":\"released\",\"syncEnabled\":true,\"preventSearch\":false,\"tagRequests\":false}") == 2?? ]] && OVOK=$((OVOK+1))
+	fi
+	if (( OVOK )); then
+		ok "Overseerr an $OVOK Apps angebunden"
+	else
+		ok "Overseerr ist bereits angebunden"
+	fi
+fi
+
 # --- VPN-Gegenprobe
 if (( USE_TORRENT )); then
 	v=$(docker compose exec -T gluetun sh -c 'wget -qO- --timeout=10 https://ipinfo.io/ip' 2>/dev/null | tr -d '[:space:]')
@@ -1145,7 +1520,16 @@ else
 	printf '     aber Umrechnen aus, und dafuer wird es zu langsam.\n'
 	printf '     Siehe docs/04-hardware.md.\n'
 fi
-printf '  %d. Qualitaetsprofile schreiben:  docker compose run --rm recyclarr sync\n' $((n++))
+# Was hier steht, ist genau das, was sich NICHT skripten laesst: eine
+# Kontoanmeldung, eine Auswahl, die von deinem Abo abhaengt. Alles andere
+# hat das Skript oben schon eingetragen.
+printf '  %d. In Prowlarr Suchquellen hinzufuegen (Indexers, Add Indexer).\n' $((n++))
+printf '     Das ist der einzige Schritt, ohne den nichts gefunden wird.\n'
+printf '     Welche und mit welcher Prioritaet: docs/03-deutsche-profile.md\n'
+printf '  %d. Overseerr im Browser oeffnen und mit dem Plex-Konto anmelden.\n' $((n++))
+printf '     Sonarr und Radarr sind darin schon eingetragen.\n'
+printf '  %d. Navidrome im Browser oeffnen und das Admin-Konto anlegen.\n' $((n++))
+(( USE_USENET ))    && printf '  %d. In SABnzbd die Zugangsdaten deines Usenet-Anbieters eintragen.\n' $((n++))
 (( ! USE_TORRENT )) && printf '  %d. Torrents spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
 (( ! USE_DOCS ))    && printf '  %d. Paperless spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
 (( USE_DOCS ))      && printf '  %d. OneDrive anbinden: docs/06-paperless-onedrive.md\n' $((n++))
