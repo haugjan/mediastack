@@ -369,6 +369,7 @@ mkdir -p \
 	"$DATA_ROOT"/usenet/incomplete \
 	"$DATA_ROOT"/usenet/complete/{movies,tv,music,books} \
 	"$DATA_ROOT"/media/{movies,tv,music,audiobooks,books} \
+	"$DATA_ROOT"/youtube \
 	"$DATA_ROOT"/paperless/{data,media,consume,export}
 chown -R "$MEDIA_USER":"$MEDIA_GROUP" "$DATA_ROOT" 2>>"$LOG"
 find "$DATA_ROOT" -type d -exec chmod 2775 {} + 2>>"$LOG"
@@ -726,6 +727,39 @@ if (( ! USE_USENET )); then
 		info "Uebersprungen."
 	fi
 fi
+# Musik braucht weder Tracker noch Abo: Lidarr holt sie mit dem Plugin
+# Tubifarry von YouTube. Der Haken ist unsichtbar, wenn man ihn nicht kennt.
+# Tubifarry schlaegt jedes Album zuerst ueber die Spotify-API nach und sucht
+# erst danach bei YouTube. Ohne eigene Zugangsdaten antwortet Spotify mit
+# 403, der Indexer liefert null Treffer, und in Lidarr sieht das aus, als
+# gaebe es das Album nirgends.
+if [[ -n $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]]; then
+	ok "Musik ueber YouTube ist schon eingerichtet"
+else
+	echo
+	echo "  Musik geht ohne Tracker und ohne Abo: Lidarr holt sie ueber das"
+	echo "  Plugin Tubifarry von YouTube. Dafuer braucht es einen kostenlosen"
+	echo "  Spotify-Entwicklerzugang, mit dem Tubifarry die Alben nachschlaegt."
+	echo "  Ein normales Spotify-Konto genuegt, kein Abo."
+	echo
+	echo "    https://developer.spotify.com/dashboard  ->  Create app"
+	echo "    Redirect URI: http://localhost:8686 , API: Web API"
+	echo
+	if ask_yn "Spotify-Zugangsdaten jetzt eintragen?" n; then
+		sid="$(ask 'Client ID')"
+		ssec="$(ask_secret 'Client Secret')"
+		if [[ -n $sid && -n $ssec ]]; then
+			env_set SPOTIFY_CLIENT_ID "$sid"
+			env_set SPOTIFY_CLIENT_SECRET "$ssec"
+			ok "Musik ueber YouTube wird eingerichtet"
+		else
+			note "Leer gelassen, uebersprungen."
+		fi
+	else
+		info "Uebersprungen. Musik laeuft dann nur ueber die Suchquellen in Prowlarr."
+	fi
+fi
+
 
 # =========================================================================
 # 7. Dokumente
@@ -1100,11 +1134,16 @@ trap 'rm -rf "$API_TMP"' EXIT
 cat >"$API_TMP/add.py" <<'PY'
 import json, sys, urllib.error, urllib.request
 
-base, key, endpoint, impl, extra, fields = sys.argv[1:7]
+args = sys.argv[1:]
+base, key, endpoint, impl, extra, fields = args[:6]
+# Siebtes Argument "update": einen vorhandenen Eintrag mit den neuen Werten
+# ueberschreiben, statt ihn stehen zu lassen. Noetig ueberall dort, wo ein
+# Wert spaeter nachgereicht werden kann, etwa Zugangsdaten beim zweiten Lauf.
+update = len(args) > 6 and args[6] == "update"
 want = dict(p.split("=", 1) for p in fields.split("\x1f") if p)
 
-def call(path, data=None):
-    req = urllib.request.Request(base + path)
+def call(path, data=None, method=None):
+    req = urllib.request.Request(base + path, method=method)
     req.add_header("X-Api-Key", key)
     if data is not None:
         req.add_header("Content-Type", "application/json")
@@ -1112,22 +1151,35 @@ def call(path, data=None):
     with urllib.request.urlopen(req, data, timeout=60) as r:
         return json.loads(r.read() or "null")
 
+def set_fields(entry):
+    for f in entry["fields"]:
+        if f["name"] in want:
+            v, cur = want[f["name"]], f.get("value")
+            # Den Typ uebernehmen, sonst lehnt die App den Wert ab.
+            if isinstance(cur, bool):  v = v.lower() in ("1", "true", "ja")
+            elif isinstance(cur, int): v = int(v)
+            f["value"] = v
+    return entry
+
 try:
     for c in call("/" + endpoint):
-        if c.get("implementation") == impl:
+        if c.get("implementation") != impl:
+            continue
+        if not update:
             print("schon vorhanden"); sys.exit(3)
+        c = set_fields(c)
+        c.update(json.loads(extra))
+        try:
+            call("/%s/%s" % (endpoint, c["id"]), c, "PUT")
+        except urllib.error.HTTPError as e:
+            sys.exit("abgelehnt (%s): %s" % (e.code, e.read().decode()[:300]))
+        print("aktualisiert"); sys.exit(0)
     schema = next(s for s in call("/" + endpoint + "/schema")
                   if s.get("implementation") == impl)
 except (urllib.error.URLError, StopIteration) as e:
     sys.exit("nicht erreichbar: %s" % e)
 
-for f in schema["fields"]:
-    if f["name"] in want:
-        v, old = want[f["name"]], f.get("value")
-        # Den Typ aus dem Schema uebernehmen, sonst lehnt die App den Wert ab.
-        if isinstance(old, bool):  v = v.lower() in ("1", "true", "ja")
-        elif isinstance(old, int): v = int(v)
-        f["value"] = v
+schema = set_fields(schema)
 schema.update(json.loads(extra))
 schema.pop("id", None)
 try:
@@ -1167,6 +1219,49 @@ except urllib.error.HTTPError as e:
     sys.exit("abgelehnt (%s): %s" % (e.code, e.read().decode()[:200]))
 PY
 
+# Installiert ein Lidarr-Plugin aus GitHub, falls es fehlt.
+# Exit 0 = angestossen (Lidarr muss danach neu starten), 3 = schon da.
+cat >"$API_TMP/plugin.py" <<'PY'
+import json, sys, time, urllib.error, urllib.request
+
+base, key, repo = sys.argv[1:4]
+
+def call(path, data=None):
+    req = urllib.request.Request(base + path)
+    req.add_header("X-Api-Key", key)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+        data = json.dumps(data).encode()
+    with urllib.request.urlopen(req, data, timeout=60) as r:
+        return json.loads(r.read() or "null")
+
+# Der Endpunkt heisst system/plugins. Das naheliegende /plugin gibt es
+# nicht: das antwortet auch in plugin-faehigen Builds mit 404 und taugt
+# deshalb nicht als Pruefung.
+try:
+    for pl in call("/system/plugins") or []:
+        if "%s/%s" % (pl.get("owner", ""), pl.get("name", "")) == repo:
+            print("schon vorhanden"); sys.exit(3)
+except urllib.error.URLError as e:
+    sys.exit("nicht erreichbar: %s" % e)
+
+try:
+    cmd = call("/command", {"name": "InstallPlugin",
+                            "githubUrl": "https://github.com/" + repo})
+except urllib.error.HTTPError as e:
+    sys.exit("abgelehnt (%s): %s" % (e.code, e.read().decode()[:200]))
+
+# Lidarr laedt und entpackt im Hintergrund. In der Plugin-Liste erscheint
+# das Plugin erst nach dem Neustart, der Fortschritt steht nur am Kommando.
+state = {}
+for _ in range(60):
+    time.sleep(2)
+    state = call("/command/%s" % cmd["id"]) or {}
+    if state.get("status") in ("completed", "failed", "aborted"):
+        break
+if state.get("status") != "completed":
+    sys.exit("Installation %s" % (state.get("status") or "ohne Antwort"))
+PY
 US=$'\x1f'   # Trennzeichen fuer die Feldliste, kommt in Werten nicht vor
 
 arr_add() { python3 "$API_TMP/add.py" "$@" >>"$LOG" 2>&1; }
@@ -1266,6 +1361,50 @@ if (( CLIENTS )); then
 	ok "$CLIENTS Download-Clients eingetragen"
 elif (( CLIENTS_DA )); then
 	ok "Download-Clients stehen bereits"
+fi
+# --- Lidarr: Musik ueber YouTube (Plugin Tubifarry)
+# Das Plugin holt Lidarr selbst aus GitHub, danach muss es einmal neu
+# starten, sonst kennt es die neuen Quellen nicht. Der Indexer braucht die
+# Spotify-Zugangsdaten aus Schritt 6: ohne sie antwortet Spotify mit 403
+# und der Indexer liefert null Treffer, ohne dass es nach einem Fehler
+# aussieht. Ohne Zugangsdaten bleibt der ganze Abschnitt aus.
+SPOT_ID="$(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true)"
+SPOT_SEC="$(env_get SPOTIFY_CLIENT_SECRET 2>/dev/null || true)"
+if [[ -n $SPOT_ID && -n $SPOT_SEC && -n $LIDARR_KEY ]] && api_ready 8686 v1 "$LIDARR_KEY"; then
+	LBASE="http://localhost:8686/api/v1"
+	python3 "$API_TMP/plugin.py" "$LBASE" "$LIDARR_KEY" TypNull/Tubifarry >>"$LOG" 2>&1
+	case $? in
+		0)  info "Tubifarry installiert, Lidarr startet einmal neu"
+		    docker compose restart lidarr >>"$LOG" 2>&1
+		    api_ready 8686 v1 "$LIDARR_KEY" \
+		        || problem "Lidarr kam nach dem Neustart nicht zurueck" ;;
+		3)  : ;;
+		*)  problem "Tubifarry liess sich nicht installieren (Details in setup.log)" ;;
+	esac
+
+	MUSOK=0; MUSDA=0
+	# ffmpeg liegt im Container, es kommt per LSIO-Mod dazu. Der Zielordner
+	# muss unter /data liegen, sonst kopiert Lidarr beim Import, statt zu
+	# verlinken.
+	if arr_add "$LBASE" "$LIDARR_KEY" downloadclient YoutubeClient \
+		'{"name":"Youtube","enable":true,"priority":1}' \
+		"downloadPath=/data/youtube${US}fFmpegPath=/usr/bin/ffmpeg"
+	then MUSOK=$((MUSOK+1))
+	elif [[ $? == 3 ]]; then MUSDA=$((MUSDA+1))
+	fi
+	# "update": reicht jemand die Zugangsdaten erst beim zweiten Lauf nach,
+	# werden sie in den vorhandenen Indexer geschrieben statt verworfen.
+	if arr_add "$LBASE" "$LIDARR_KEY" indexer TubifarryIndexer \
+		'{"name":"Tubifarry (YouTube)","enable":true,"enableRss":false,"enableAutomaticSearch":true,"enableInteractiveSearch":true,"priority":25}' \
+		"customSpotifyClientId=${SPOT_ID}${US}customSpotifyClientSecret=${SPOT_SEC}" update
+	then MUSOK=$((MUSOK+1))
+	elif [[ $? == 3 ]]; then MUSDA=$((MUSDA+1))
+	fi
+	if (( MUSOK )); then
+		ok "Musik ueber YouTube eingerichtet (Tubifarry)"
+	elif (( MUSDA )); then
+		ok "Tubifarry steht bereits"
+	fi
 fi
 
 # --- Medienverwaltung: hardlinken statt kopieren, umbenennen, Untertitel
@@ -1609,6 +1748,10 @@ printf '  %d. Overseerr im Browser oeffnen und mit dem Plex-Konto anmelden.\n' $
 printf '     Sonarr und Radarr sind darin schon eingetragen.\n'
 printf '  %d. Navidrome im Browser oeffnen und das Admin-Konto anlegen.\n' $((n++))
 (( USE_USENET ))    && printf '  %d. In SABnzbd die Zugangsdaten deines Usenet-Anbieters eintragen.\n' $((n++))
+if [[ -z $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]]; then
+	printf '  %d. Musik ueber YouTube braucht einen kostenlosen Spotify-Zugang.\n' $((n++))
+	printf '     Anlegen, dann sudo ./setup.sh nochmal starten. docs/08-musik.md\n'
+fi
 (( ! USE_TORRENT )) && printf '  %d. Torrents spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
 (( ! USE_DOCS ))    && printf '  %d. Paperless spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
 (( USE_DOCS ))      && printf '  %d. OneDrive anbinden: docs/06-paperless-onedrive.md\n' $((n++))

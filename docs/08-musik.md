@@ -68,6 +68,10 @@ nachinstalliert, Tubifarry braucht alle drei.
 
 ### Installation
 
+**Normalerweise macht das `setup.sh` selbst**, sobald die Spotify-Zugangsdaten
+aus dem nächsten Abschnitt vorliegen: Plugin holen, Lidarr neu starten,
+Quellen eintragen. Von Hand geht es so:
+
 1. `https://lidarr.example.com` → **System → Plugins**
 2. In das GitHub-Feld `https://github.com/TypNull/Tubifarry` eintragen,
    **Install** klicken
@@ -103,41 +107,48 @@ Spotify-Listen.
 
 ### Der Indexer braucht Spotify-Zugangsdaten
 
-Das ist der Schritt, an dem es still scheitert. Tubifarry löst ein gesuchtes
-Album zuerst über die **Spotify-API** auf und sucht erst danach bei YouTube.
-Ohne eigene Zugangsdaten antwortet Spotify mit `403 Forbidden`, der Indexer
-liefert null Treffer, und in der Oberfläche sieht das aus, als gäbe es das
-Album nirgends. Im Protokoll steht es deutlich:
+Das ist der Schritt, an dem es sonst still scheitert. Tubifarry löst ein
+gesuchtes Album zuerst über die **Spotify-API** auf und sucht erst danach bei
+YouTube. Ohne eigene Zugangsdaten antwortet Spotify mit `403 Forbidden`, der
+Indexer liefert null Treffer, und in der Oberfläche sieht das aus, als gäbe es
+das Album nirgends. Im Protokoll steht es deutlich:
 
 ```
 Warn|TubifarryIndexer| HTTP request failed: [403:Forbidden]
   at [https://api.spotify.com/v1/search?q=album%3A...]
 ```
 
-Die Zugangsdaten sind kostenlos und in zwei Minuten angelegt:
+**`setup.sh` fragt in Schritt 6 danach** und richtet danach alles selbst ein:
+Plugin installieren, Lidarr neu starten, den YouTube-Client und den Indexer
+samt Zugangsdaten eintragen. Du musst die Zugangsdaten nur besorgen, und das
+ist kostenlos und in zwei Minuten erledigt:
 
 1. [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
    mit deinem normalen Spotify-Konto öffnen, **Create app**
 2. Name und Beschreibung frei wählen, als Redirect URI genügt
    `http://localhost:8686`, API auswählen: **Web API**
 3. Client ID und Client Secret kopieren
-4. In Lidarr unter **Settings → Indexers → Tubifarry** in die Felder
-   **Spotify Client ID** und **Spotify Client Secret** eintragen
+4. `sudo ./setup.sh` starten und bei der Frage einsetzen
 
 Ein Bezahlkonto ist dafür nicht nötig, ein kostenloses Spotify-Konto genügt.
+Hast du beim ersten Lauf „nein" gesagt, reichst du sie einfach beim nächsten
+nach: der Installer schreibt sie dann in den vorhandenen Indexer.
+
+Von Hand geht es auch, unter **Settings → Indexers → Tubifarry**, Felder
+**Spotify Client ID** und **Spotify Client Secret**.
 
 ### YouTube als Quelle
 
-Unter **Settings → Download Clients → Add → Youtube** einrichten. Zwei Felder
-sind Pflicht, sonst landet nichts im richtigen Ordner:
+Den Download-Client legt `setup.sh` mit an. Wer ihn selbst einträgt
+(**Settings → Download Clients → Add → Youtube**), braucht zwei Felder:
 
 | Feld | Wert |
 |---|---|
 | Download Path | `/data/youtube` |
 | FFmpeg Path | `/usr/bin/ffmpeg` |
 
-`/data/youtube` muss dem Dienstbenutzer gehören und **unter `/data` liegen**,
-sonst kopiert Lidarr beim Import statt zu verlinken.
+`/data/youtube` legt `setup.sh` in Schritt 3 an. Der Ordner muss **unter
+`/data` liegen**, sonst kopiert Lidarr beim Import, statt zu verlinken.
 
 > **YouTube wehrt sich aktiv.** Das steht so im README von Tubifarry:
 > automatisierte Downloader werden erkannt und blockiert. Dagegen braucht es

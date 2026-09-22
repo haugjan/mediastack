@@ -67,10 +67,14 @@ Download-Clients in Sonarr, Radarr und Lidarr (mit Host `gluetun`, der
 häufigsten Fehlerquelle überhaupt), die Kategorien in qBittorrent, Hardlinks
 und Umbenennen, Prowlarr an alle drei Apps, die deutschen Qualitätsprofile,
 Plex-Bibliotheken samt Transcode-Ziel, das Bazarr-Sprachprofil Deutsch vor
-Englisch und Overseerr an Sonarr und Radarr. Was im Browser bleibt, sind vier
-Dinge, die niemand skripten kann: die Auswahl deiner Suchquellen in Prowlarr,
-die Anmeldung von Overseerr an deinem Plex-Konto, das Admin-Konto in
-Navidrome und, falls du Usenet nutzt, die Zugangsdaten deines Anbieters.
+Englisch und Overseerr an Sonarr und Radarr. Hast du in Schritt 6 einen
+Spotify-Entwicklerzugang hinterlegt, installiert es zusätzlich das
+Lidarr-Plugin Tubifarry und richtet YouTube als Musikquelle ein.
+
+Was im Browser bleibt, sind vier Dinge, die niemand skripten kann: die Auswahl
+deiner Suchquellen in Prowlarr, die Anmeldung von Overseerr an deinem
+Plex-Konto, das Admin-Konto in Navidrome und, falls du Usenet nutzt, die
+Zugangsdaten deines Anbieters.
 
 ## Was drin ist
 
