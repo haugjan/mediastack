@@ -63,6 +63,7 @@ fest.
 | `usenet` | SABnzbd | Usenet-Abo |
 | `docs` | Paperless samt Postgres, Redis, Gotenberg, Tika | nichts |
 | `proxy` | Caddy | Domain und Azure DNS |
+| `radio` | Aircheckarr | nichts, der Bau dauert nur |
 | `extras` | Kometa, Scrutiny | Plex-Token bzw. Plattenliste |
 
 Neuer Dienst, der Zugangsdaten braucht: **immer hinter ein Profil**. Ohne
@@ -111,6 +112,20 @@ Rund 1500 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
   Ordner selbst ein; nimmt man sie mit, verlieren sie die Rechte an ihren
   eigenen Dateien und Paperless antwortet mit 500 — bei weiterhin grünem
   Healthcheck, weil `pg_isready` nur den Socket prüft.
+
+## aircheckarr
+
+Der einzige selbstgeschriebene Dienst im Stack, C# auf .NET 9, eigener
+Unterordner mit eigenem Dockerfile. Baut nur, wenn das Profil `radio` aktiv
+ist. Regeln dort: englische Bezeichner (das ist C#), deutsche Kommentare,
+ASCII wie überall sonst. Einzige Fremdabhängigkeit ist
+`Microsoft.Data.Sqlite`; Messen, Schneiden und Taggen macht `ffmpeg`.
+
+Zwei Dinge, die man nicht kaputtmachen darf, weil sie im Praxislauf teuer
+erkauft wurden: der **erste Titel nach dem Verbinden wird übersprungen**
+(er läuft schon, der Mitschnitt wäre ein Torso), und **AAC wandert nach
+M4A**, weil rohes ADTS keinen Platz für Tags hat und `-metadata` dort
+stillschweigend verfällt.
 
 ## .env
 

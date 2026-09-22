@@ -31,7 +31,7 @@ declare -A PORT=(
 	[paperless]=8000 [sonarr]=8989 [radarr]=7878 [lidarr]=8686
 	[prowlarr]=9696 [bazarr]=6767 [qbittorrent]=8080 [sabnzbd]=8081
 	[homepage]=3000 [uptime]=3001 [scrutiny]=8082 [cleanuparr]=11011
-	[tautulli]=8181
+	[tautulli]=8181 [aircheckarr]=8099
 )
 # Dienst -> Subdomain, falls eine Domain eingerichtet ist.
 declare -A SUB=(
@@ -39,7 +39,7 @@ declare -A SUB=(
 	[paperless]=paperless [sonarr]=sonarr [radarr]=radarr [lidarr]=lidarr
 	[prowlarr]=prowlarr [bazarr]=bazarr [qbittorrent]=qbit [sabnzbd]=sab
 	[homepage]=home [uptime]=status [scrutiny]=disks [cleanuparr]=clean
-	[tautulli]=stats
+	[tautulli]=stats [aircheckarr]=radio
 )
 
 # --------------------------------------------------------------- Darstellung
@@ -385,7 +385,7 @@ ok "Ordnerstruktur angelegt"
 # root an und die Container duerfen nicht hineinschreiben.
 mkdir -p "$REPO_DIR"/config/{gluetun,qbittorrent,sabnzbd,prowlarr,sonarr,radarr,lidarr,bazarr}
 mkdir -p "$REPO_DIR"/config/{plex,navidrome,overseerr,tautulli,kometa,cleanuparr,uptime-kuma}
-mkdir -p "$REPO_DIR"/config/{paperless-db,paperless-redis}
+mkdir -p "$REPO_DIR"/config/{paperless-db,paperless-redis,aircheckarr}
 mkdir -p "$REPO_DIR"/config/audiobookshelf/{config,metadata}
 mkdir -p "$REPO_DIR"/config/scrutiny/{config,influxdb}
 mkdir -p "$REPO_DIR"/config/caddy/{data,config}
@@ -933,6 +933,22 @@ onedrive_setup() {
 	return 0
 }
 
+USE_RADIO=0
+if [[ ${COMPOSE_PROFILES_OLD:-} == *radio* ]]; then
+	USE_RADIO=1; ok "Radiomitschnitt ist schon eingerichtet"
+else
+	echo
+	echo "  Aircheckarr schneidet gewuenschte Titel aus Webradios mit: du"
+	echo "  traegst ein, was dir fehlt, und sobald es irgendwo laeuft, liegt"
+	echo "  es danach in der Bibliothek. Braucht kein Abo und keinen Zugang."
+	echo "  Die Qualitaet liegt bei 128 bis 320 kbit/s, je nach Sender."
+	if ask_yn "Radiomitschnitt einrichten? (Bau dauert einige Minuten)" n; then
+		USE_RADIO=1; ok "Radiomitschnitt wird eingerichtet"
+	else
+		info "Uebersprungen."
+	fi
+fi
+
 # =========================================================================
 # 7. Dokumente
 # =========================================================================
@@ -1029,6 +1045,9 @@ env_set TAILSCALE_IP "${TS_IP:-127.0.0.1}"
 [[ -z $(env_get DOCKER_SUBNET) ]] && env_set DOCKER_SUBNET "172.28.0.0/16"
 [[ -z $(env_get VPN_COUNTRIES) ]] && env_set VPN_COUNTRIES "Switzerland"
 [[ -z $(env_get QBIT_USER) ]] && env_set QBIT_USER "admin"
+[[ -z $(env_get AIRCHECKARR_MIN_BITRATE) ]] && env_set AIRCHECKARR_MIN_BITRATE 128
+[[ -z $(env_get AIRCHECKARR_CODECS) ]] && env_set AIRCHECKARR_CODECS "mp3,aac"
+[[ -z $(env_get AIRCHECKARR_MAX_STATIONS) ]] && env_set AIRCHECKARR_MAX_STATIONS 12
 [[ -z $(env_get BACKFILL_ITEMS_PER_CYCLE) ]] && env_set BACKFILL_ITEMS_PER_CYCLE 5
 [[ -z $(env_get BACKFILL_CYCLE_MINUTES) ]] && env_set BACKFILL_CYCLE_MINUTES 60
 [[ -z $(env_get BACKFILL_SEARCH_UPGRADES) ]] && env_set BACKFILL_SEARCH_UPGRADES false
@@ -1042,6 +1061,7 @@ PROFILES=()
 (( USE_TORRENT )) && PROFILES+=(torrent)
 (( USE_USENET ))  && PROFILES+=(usenet)
 (( USE_DOCS ))    && PROFILES+=(docs)
+(( USE_RADIO ))   && PROFILES+=(radio)
 (( USE_PROXY ))   && PROFILES+=(proxy)
 PROF_STR="$(IFS=,; echo "${PROFILES[*]}")"
 env_set COMPOSE_PROFILES "$PROF_STR"
@@ -1071,6 +1091,7 @@ INACTIVE=()
 (( USE_TORRENT )) || INACTIVE+=(qbittorrent)
 (( USE_USENET ))  || INACTIVE+=(sabnzbd)
 (( USE_DOCS ))    || INACTIVE+=(paperless)
+(( USE_RADIO ))   || INACTIVE+=(aircheckarr)
 if [[ -f $REPO_DIR/homepage/services.yaml.tmpl ]]; then
 	# Die Daten kommen ueber eine eigene Datei, denn stdin von python3 -
 	# ist schon mit dem Skript selbst belegt.
@@ -1171,6 +1192,11 @@ cd "$REPO_DIR" || stop "Kann nicht nach $REPO_DIR wechseln."
 if (( USE_PROXY )); then
 	info "Caddy bauen, das dauert einige Minuten"
 	try "Caddy gebaut" docker compose build caddy
+fi
+
+if (( USE_RADIO )); then
+	info "Aircheckarr bauen, das dauert einige Minuten"
+	try "Aircheckarr gebaut" docker compose build aircheckarr
 fi
 
 info "Images holen, das dauert je nach Leitung 5 bis 20 Minuten"
@@ -1931,6 +1957,7 @@ printf '  %-22s %s\n' "Wuensche"    "$(url_for overseerr)"
 (( USE_DOCS ))    && printf '  %-22s %s\n' "Dokumente" "$(url_for paperless)"
 (( USE_TORRENT )) && printf '  %-22s %s\n' "Torrents"  "$(url_for qbittorrent)"
 (( USE_USENET ))  && printf '  %-22s %s\n' "Usenet"    "$(url_for sabnzbd)"
+(( USE_RADIO ))   && printf '  %-22s %s\n' "Radiomitschnitt" "$(url_for aircheckarr)"
 
 if (( USE_DOCS )) && [[ -n ${PW:-} ]]; then
 	printf '\n%sPaperless-Zugang%s (steht auch in .env)\n' "$B" "$N"

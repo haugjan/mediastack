@@ -104,6 +104,8 @@ Prowlarr  ──► Suchquellen
    ├──► Bazarr           Untertitel, Deutsch vor Englisch
    └──► Tautulli, Kometa Statistiken, Poster und Sammlungen
 
+Aircheckarr     Wunschtitel aus dem Webradio mitschneiden (optional)
+
 Paperless-ngx   Dokumente mit Volltextsuche, OCR auf Deutsch
 Homepage        Startseite mit Live-Status
 Uptime Kuma     läuft alles noch
@@ -252,6 +254,7 @@ homepage/services.yaml.tmpl   Dashboard-Vorlage, setup.sh setzt die Links
 systemd/                      Timer fuer OneDrive und Sicherung
 scripts/update.sh             neue Version holen, ohne git und ohne gh
 scripts/backfill.py           gedrosselte Nachsuche, Huntarr-Ersatz
+aircheckarr/                  Radiomitschnitt, eigener Dienst in C#
 scripts/paperless-inbox.sh    OneDrive -> consume/
 scripts/paperless-export.sh   export/ -> OneDrive, Klartext und verschluesselt
 scripts/backup-config.sh      config/ verschluesselt sichern

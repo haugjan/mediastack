@@ -415,6 +415,42 @@ services:
     volumes:
       - ./scripts/backfill.py:/app/backfill.py:ro
 
+  # =========================================================== Radiomitschnitt
+  # Schneidet gewuenschte Titel aus Webradios mit. Eigener Bau, weil es
+  # nichts Fertiges gibt, das an den ICY-Metadaten schneidet statt blind
+  # nach Zeit. Steht hinter einem Profil, denn der Bau dauert einige
+  # Minuten und ohne Wunschliste tut der Dienst ohnehin nichts.
+  aircheckarr:
+    <<: *base
+    build:
+      context: ./aircheckarr
+    image: mediastack/aircheckarr:local
+    container_name: aircheckarr
+    profiles: [radio]
+    user: ${PUID}:${PGID}
+    environment:
+      TZ: ${TZ}
+      AIRCHECKARR_LIBRARY: /data/media/music
+      AIRCHECKARR_WORK: /data/aircheck
+      AIRCHECKARR_DB: /config/aircheckarr.db
+      AIRCHECKARR_MIN_BITRATE: ${AIRCHECKARR_MIN_BITRATE}
+      AIRCHECKARR_CODECS: ${AIRCHECKARR_CODECS}
+      AIRCHECKARR_MAX_STATIONS: ${AIRCHECKARR_MAX_STATIONS}
+      # Holt sich die fehlenden Alben aus Lidarr und macht Titelwuensche
+      # daraus. Ohne Schluessel laeuft es mit der eigenen Liste weiter.
+      LIDARR_URL: http://lidarr:8686
+      LIDARR_API_KEY: ${LIDARR_API_KEY}
+    volumes:
+      - ./config/aircheckarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - 8099:8099
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8099/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
   # ============================================================ Plex-Zusaetze
   tautulli:
     <<: *base

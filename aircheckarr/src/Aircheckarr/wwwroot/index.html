@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aircheckarr</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <h1>aircheckarr</h1>
+  <p id="status">wird geladen …</p>
+</header>
+
+<nav>
+  <button data-tab="wuensche" class="aktiv">Wünsche</button>
+  <button data-tab="sender">Sender</button>
+  <button data-tab="mitschnitte">Mitschnitte</button>
+</nav>
+
+<main>
+  <section id="wuensche">
+    <form id="wunsch-form">
+      <input name="artist" placeholder="Interpret" required>
+      <input name="title" placeholder="Titel" required>
+      <input name="album" placeholder="Album (optional)">
+      <button type="submit">Wünschen</button>
+      <button type="button" id="aus-lidarr">Aus Lidarr übernehmen</button>
+    </form>
+    <p class="hinweis">
+      Was hier steht, wird mitgeschnitten, sobald es irgendwo im Radio läuft.
+      Alles andere läuft durch und wird vergessen.
+    </p>
+    <table id="wunsch-tabelle"></table>
+  </section>
+
+  <section id="sender" hidden>
+    <form id="katalog-form">
+      <input name="tag" placeholder="Stilrichtung, z. B. rock">
+      <input name="country" placeholder="Land, z. B. CH" maxlength="2">
+      <input name="limit" type="number" value="300" min="1" max="2000">
+      <button type="submit">Katalog holen</button>
+      <label><input type="checkbox" id="nur-tauglich" checked> nur taugliche</label>
+    </form>
+    <p class="hinweis">
+      Die Bitrate im Katalog ist Selbstauskunft und oft falsch. Maßgeblich
+      ist die Spalte <strong>gemessen</strong>, die kommt von ffprobe.
+    </p>
+    <table id="sender-tabelle"></table>
+  </section>
+
+  <section id="mitschnitte" hidden>
+    <table id="mitschnitt-tabelle"></table>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+:root {
+  --bg: #fbfbfa; --fg: #1d1c1a; --schwach: #6b6a67;
+  --linie: #e3e2df; --feld: #ffffff; --akzent: #b4532a;
+  --gut: #2f6f4f; --schlecht: #9b3b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b19; --fg: #eceae5; --schwach: #9a9892;
+    --linie: #333230; --feld: #232220; --akzent: #d97a4e;
+    --gut: #6fbf90; --schlecht: #d98080;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 16px 48px; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  max-width: 1100px; margin-inline: auto;
+}
+header { padding: 28px 0 8px; }
+h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
+#status { margin: 6px 0 0; color: var(--schwach); font-size: 14px; }
+nav { display: flex; gap: 4px; border-bottom: 1px solid var(--linie); margin: 16px 0 20px; }
+nav button {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 9px 14px; font: inherit; color: var(--schwach); cursor: pointer;
+}
+nav button.aktiv { color: var(--fg); border-bottom-color: var(--akzent); }
+form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+input[type=text], input:not([type]), input[type=number] {
+  padding: 8px 10px; border: 1px solid var(--linie); border-radius: 6px;
+  background: var(--feld); color: var(--fg); font: inherit; min-width: 150px; flex: 1 1 160px;
+}
+form button {
+  padding: 8px 14px; border: 1px solid var(--linie); border-radius: 6px;
+  background: var(--feld); color: var(--fg); font: inherit; cursor: pointer;
+}
+form button[type=submit] { background: var(--akzent); border-color: var(--akzent); color: #fff; }
+label { display: flex; align-items: center; gap: 6px; color: var(--schwach); font-size: 14px; }
+.hinweis { color: var(--schwach); font-size: 13px; margin: 4px 0 16px; max-width: 70ch; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--linie); }
+th { color: var(--schwach); font-weight: 500; font-size: 13px; }
+td.zahl, th.zahl { text-align: right; font-variant-numeric: tabular-nums; }
+.gut { color: var(--gut); }
+.schlecht { color: var(--schlecht); }
+.leer { color: var(--schwach); padding: 24px 0; }
+button.klein {
+  background: none; border: 1px solid var(--linie); border-radius: 5px;
+  padding: 3px 9px; font: inherit; font-size: 13px; color: var(--schwach); cursor: pointer;
+}
+@media (max-width: 640px) { .weg-klein { display: none; } }

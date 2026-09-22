@@ -95,6 +95,11 @@ books.{$BASE_DOMAIN} {
 	import private_app 13378
 }
 
+# Radiomitschnitte.
+radio.{$BASE_DOMAIN} {
+	import private_app 8099
+}
+
 # Dashboard.
 home.{$BASE_DOMAIN} {
 	import private_app 3000

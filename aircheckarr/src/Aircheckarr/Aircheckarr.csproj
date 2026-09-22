@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>Aircheckarr</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Einzige Fremdabhaengigkeit. Tags und Schnitt macht ffmpeg, das im
+         Container ohnehin liegt; eine Tag-Bibliothek waere doppelt. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>
