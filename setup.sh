@@ -117,9 +117,15 @@ ask_choice() {
 }
 
 # ------------------------------------------------------------- .env-Zugriff
+# Liest wie Docker Compose: der Wert geht bis zum Zeilenende, ein # zaehlt
+# nur mit Leerraum davor als Kommentar. Anfuehrungszeichen kommen hier nicht
+# vor, env_set schreibt keine. Dieselbe Regel in scripts/lib-env.sh.
 env_get() {
 	[[ -f $REPO_DIR/.env ]] || return 1
-	awk -F= -v k="$1" '$1==k {sub(/^[^=]*=/,""); print; exit}' "$REPO_DIR/.env"
+	awk -F= -v k="$1" '$1==k {
+		sub(/^[^=]*=/, ""); sub(/[[:space:]]+#.*$/, ""); sub(/[[:space:]]+$/, "")
+		print; exit
+	}' "$REPO_DIR/.env"
 }
 
 env_set() {
@@ -761,11 +767,176 @@ else
 	fi
 fi
 
+# =========================================================================
+# OneDrive per rclone
+# =========================================================================
+# Genau ein Schritt braucht hier einen Menschen: die Anmeldung bei Microsoft
+# laeuft ueber OAuth im Browser. Alles davor und danach macht das Skript.
+#
+# rclone laeuft dabei als der angemeldete Benutzer und nicht als root, denn
+# root hat keine Sitzung, in der ein Browser aufgehen koennte. Die fertige
+# Konfiguration wandert danach nach /etc/rclone, weil die Timer als
+# Systemdienst laufen und nicht an einer Desktop-Sitzung haengen duerfen.
+
+RCLONE_SYS_CONF=/etc/rclone/rclone.conf
+CRYPT_NEW=0
+
+rclone_home() { getent passwd "$ADMIN_USER" | cut -d: -f6; }
+
+# rclone als Desktop-Benutzer, mit durchgereichter Sitzung, damit sich der
+# Browser oeffnen kann. Geht das nicht, druckt rclone die Adresse zum
+# Kopieren, und auch damit kommt man ans Ziel.
+rclone_user() {
+	local home; home="$(rclone_home)"
+	sudo -u "$ADMIN_USER" env \
+		HOME="${home:-/root}" \
+		XDG_RUNTIME_DIR="/run/user/$(id -u "$ADMIN_USER")" \
+		${DISPLAY:+DISPLAY="$DISPLAY"} \
+		${WAYLAND_DISPLAY:+WAYLAND_DISPLAY="$WAYLAND_DISPLAY"} \
+		rclone "$@"
+}
+
+rclone_has()  { rclone_user listremotes 2>/dev/null | grep -qx -- "$1:"; }
+rclone_live() { rclone_user lsd -- "$1:" >>"$LOG" 2>&1; }
+
+rclone_install() {
+	local v
+	if ! command -v rclone >/dev/null 2>&1; then
+		info "rclone installieren"
+		apt-get install -y -qq rclone >>"$LOG" 2>&1
+	fi
+	v="$(rclone version 2>/dev/null | awk 'NR==1 {print $2}' | tr -d v)"
+	# Alte Versionen fallen bei OneDrive um, Microsoft dreht regelmaessig an
+	# der Schnittstelle. Ist die Paketquelle zu alt, kommt das offizielle
+	# Installationsskript hinterher.
+	if [[ -n $v ]] && printf '1.60\n%s\n' "$v" | sort -VC; then
+		ok "rclone $v"
+		return 0
+	fi
+	apt-get install -y -qq unzip >>"$LOG" 2>&1
+	try "rclone (offizielles Installationsskript)" \
+		bash -c 'curl -fsSL https://rclone.org/install.sh | bash'
+	command -v rclone >/dev/null 2>&1
+}
+
+# Namen der Remotes und der Ordner in OneDrive. Wer eigene will, traegt sie
+# vorher in die .env ein, hier wird nur gefuellt, was leer ist.
+rclone_defaults() {
+	local kv k v
+	for kv in \
+		"RCLONE_REMOTE=onedrive" \
+		"RCLONE_REMOTE_CRYPT=onedrive-crypt" \
+		"RCLONE_INBOX_PATH=Scans" \
+		"RCLONE_MIRROR_PATH=Paperless/Spiegel" \
+		"RCLONE_BACKUP_PATH=Paperless/Backup" \
+		"RCLONE_CONFIG_BACKUP_PATH=Mediastack/config"
+	do
+		k="${kv%%=*}"; v="${kv#*=}"
+		[[ -z $(env_get "$k" 2>/dev/null || true) ]] && env_set "$k" "$v"
+	done
+	return 0
+}
+
+# Die Anmeldung. rclone stellt seine eigenen Fragen, deshalb vorher der
+# Spickzettel.
+rclone_connect() {
+	local remote="$1"
+	cat <<-'EOF'
+
+	  Ab hier uebernimmt rclone. Es fragt drei Dinge:
+	    Kontotyp   OneDrive Personal   (nicht Business, nicht SharePoint)
+	    Region     global
+	    Laufwerk   das angebotene bestaetigen
+
+	  Zur Anmeldung oeffnet sich der Browser. Passiert nichts, steht im Text
+	  darunter eine Adresse mit 127.0.0.1:53682, die kopierst du in einen
+	  Browser auf diesem Rechner.
+
+	EOF
+	rclone_user config create "$remote" onedrive </dev/tty >/dev/tty 2>&1
+	rclone_live "$remote" && return 0
+	# "config create" stellt nur die Fragen des Backends. Aendert rclone daran
+	# etwas, oder bricht die Anmeldung ab, uebernimmt der vollstaendige
+	# Assistent. Der ist umstaendlicher, aber seit Jahren unveraendert.
+	note "Der kurze Weg hat nicht geklappt, jetzt der vollstaendige Assistent."
+	info "Darin: n (new remote), Name $remote, Storage onedrive, Rest wie oben,"
+	info "danach q zum Beenden."
+	rclone_user config </dev/tty >/dev/tty 2>&1
+	rclone_live "$remote"
+}
+
+# Das verschluesselte Remote liegt im selben Konto, verschluesselt aber Datei-
+# UND Verzeichnisnamen. Microsoft sieht dort nur Blobs.
+rclone_crypt() {
+	local remote="$1" crypt="$2" pw salt
+	if rclone_has "$crypt"; then
+		info "$crypt besteht schon und bleibt unveraendert"
+		return 0
+	fi
+	pw="$(gen_secret 32)"; salt="$(gen_secret 32)"
+	rclone_user config create "$crypt" crypt \
+		remote="$remote:Paperless/Verschluesselt" \
+		filename_encryption=standard \
+		directory_name_encryption=true \
+		password="$pw" \
+		password2="$salt" \
+		--obscure </dev/null >>"$LOG" 2>&1 || return 1
+	# Erst nach dem Anlegen speichern, sonst steht in der .env ein Schluessel,
+	# der zu nichts passt.
+	env_set RCLONE_CRYPT_PASSWORD "$pw"
+	env_set RCLONE_CRYPT_SALT "$salt"
+	CRYPT_NEW=1
+	return 0
+}
+
+onedrive_setup() {
+	local remote crypt inbox userconf
+	rclone_install || { problem "rclone liess sich nicht installieren"; return 1; }
+	rclone_defaults
+	remote="$(env_get RCLONE_REMOTE)"; crypt="$(env_get RCLONE_REMOTE_CRYPT)"
+	inbox="$(env_get RCLONE_INBOX_PATH)"
+
+	if rclone_live "$remote"; then
+		ok "OneDrive ist schon verbunden"
+	elif rclone_has "$remote"; then
+		note "$remote gibt es, antwortet aber nicht. Die Anmeldung ist abgelaufen."
+		info "Erneuern mit:  sudo -u $ADMIN_USER rclone config reconnect $remote:"
+		problem "OneDrive antwortet nicht"
+		return 1
+	else
+		rclone_connect "$remote" || {
+			problem "OneDrive-Anmeldung nicht abgeschlossen. Einfach spaeter nochmal: sudo ./setup.sh"
+			return 1
+		}
+		ok "Bei OneDrive angemeldet"
+	fi
+
+	rclone_crypt "$remote" "$crypt" || { problem "Verschluesseltes Remote nicht angelegt"; return 1; }
+	ok "Verschluesseltes Remote $crypt steht"
+
+	rclone_user mkdir "$remote:$inbox"     >>"$LOG" 2>&1
+	rclone_user mkdir "$remote:Paperless"  >>"$LOG" 2>&1
+	ok "Ordner $inbox/ und Paperless/ in OneDrive angelegt"
+
+	# Die Timer laufen als root und finden die Konfiguration im Home des
+	# Benutzers nicht.
+	install -d -m 700 /etc/rclone
+	# Nicht raten, wo die Datei liegt: rclone sagt es selbst.
+	userconf="$(rclone_user config file 2>/dev/null | tail -1)"
+	[[ -f $userconf ]] || userconf="$(rclone_home)/.config/rclone/rclone.conf"
+	if install -m 600 "$userconf" "$RCLONE_SYS_CONF" 2>>"$LOG"; then
+		ok "Konfiguration fuer die Timer bereit ($RCLONE_SYS_CONF)"
+	else
+		problem "rclone-Konfiguration nicht nach $RCLONE_SYS_CONF kopiert"
+		return 1
+	fi
+	return 0
+}
 
 # =========================================================================
 # 7. Dokumente
 # =========================================================================
-step "7/9  Dokumentenarchiv (optional)"
+step "7/9  Dokumente und OneDrive (optional)"
 
 USE_DOCS=0
 if [[ -n $(env_get PAPERLESS_SECRET_KEY 2>/dev/null || true) ]]; then
@@ -782,6 +953,47 @@ else
 		ok "Eingerichtet, Passwort steht am Ende in der Uebersicht"
 	else
 		info "Uebersprungen."
+	fi
+fi
+
+# --------------------------------------------------------------- OneDrive
+# Daran haengen drei Dinge: Scans vom Handy landen im Paperless-Eingang,
+# das Archiv wird taeglich gespiegelt, und config/ wird verschluesselt
+# gesichert. Ohne OneDrive laeuft alles andere unveraendert weiter, die
+# Timer bleiben dann aus.
+USE_ONEDRIVE=0
+USE_BACKUP=0
+RC_NAME="$(env_get RCLONE_REMOTE 2>/dev/null || true)"; RC_NAME="${RC_NAME:-onedrive}"
+if [[ -f $RCLONE_SYS_CONF ]] && grep -q "^\[$RC_NAME\]" "$RCLONE_SYS_CONF" 2>/dev/null; then
+	# Nicht blind uebernehmen: ein abgelaufenes Token sieht in der Datei
+	# genauso aus wie ein gueltiges. onedrive_setup prueft es nach und legt
+	# nebenbei an, was seit dem letzten Lauf fehlt.
+	info "OneDrive ist eingerichtet, wird gegengeprueft"
+	onedrive_setup && USE_ONEDRIVE=1
+else
+	echo
+	echo "  OneDrive macht drei Dinge: Scans, die du vom Handy ablegst, landen"
+	echo "  im Paperless-Eingang. Das Dokumentenarchiv wird taeglich gespiegelt."
+	echo "  Und config/ wird verschluesselt gesichert, also Plex-Fortschritt,"
+	echo "  Qualitaetsprofile und die Paperless-Datenbank."
+	echo "  Dafuer brauchst du ein Microsoft-Konto und einen Browser."
+	if ask_yn "OneDrive jetzt einrichten?" j; then
+		onedrive_setup && USE_ONEDRIVE=1
+	else
+		info "Uebersprungen. Spaeter: sudo ./setup.sh erneut starten."
+	fi
+fi
+
+if (( USE_ONEDRIVE )); then
+	if systemctl is-enabled mediastack-backup.timer >/dev/null 2>&1; then
+		USE_BACKUP=1
+		info "Naechtliche Vollsicherung ist schon eingeschaltet"
+	else
+		echo
+		echo "  Die naechtliche Vollsicherung packt config/ und .env verschluesselt"
+		echo "  nach OneDrive. Sie haelt dafuer um 04:30 fuer ein paar Minuten alle"
+		echo "  Container an, sonst erwischt sie die Datenbanken mitten im Schreiben."
+		ask_yn "Naechtliche Vollsicherung einschalten?" j && USE_BACKUP=1
 	fi
 fi
 
@@ -820,6 +1032,9 @@ env_set TAILSCALE_IP "${TS_IP:-127.0.0.1}"
 [[ -z $(env_get BACKFILL_ITEMS_PER_CYCLE) ]] && env_set BACKFILL_ITEMS_PER_CYCLE 5
 [[ -z $(env_get BACKFILL_CYCLE_MINUTES) ]] && env_set BACKFILL_CYCLE_MINUTES 60
 [[ -z $(env_get BACKFILL_SEARCH_UPGRADES) ]] && env_set BACKFILL_SEARCH_UPGRADES false
+# Auch ohne OneDrive eintragen, damit die Skripte in scripts/ nachvollziehbar
+# bleiben und ein spaeteres Nachruesten nichts mehr zu raten hat.
+rclone_defaults
 
 # Profile bestimmen, welche Container ueberhaupt starten. Fehlt ein Zugang,
 # laeuft der Dienst gar nicht, statt endlos neu zu starten.
@@ -934,7 +1149,10 @@ if [[ -d $REPO_DIR/systemd ]]; then
 			systemctl enable --now paperless-export.timer >>"$LOG" 2>&1 \
 				&& TIMERS=$((TIMERS+1))
 		fi
-		if [[ -n $(env_get RCLONE_REMOTE_CRYPT) && -n $(env_get RCLONE_CONFIG_BACKUP_PATH) ]]; then
+		# Die Vollsicherung haelt die Container fuer ein paar Minuten an.
+		# Deshalb laeuft sie nur, wenn in Schritt 7 zugestimmt wurde.
+		if (( USE_BACKUP )) \
+			&& [[ -n $(env_get RCLONE_REMOTE_CRYPT) && -n $(env_get RCLONE_CONFIG_BACKUP_PATH) ]]; then
 			systemctl enable --now mediastack-backup.timer >>"$LOG" 2>&1 \
 				&& TIMERS=$((TIMERS+1))
 		fi
@@ -942,9 +1160,9 @@ if [[ -d $REPO_DIR/systemd ]]; then
 	if (( TIMERS )); then
 		ok "$TIMERS Timer laufen (OneDrive und Sicherung)"
 	else
-		note "Sicherung und OneDrive laufen noch NICHT. Es fehlt rclone:"
-		info "  sudo rclone config   (danach nach /etc/rclone/rclone.conf kopieren)"
-		info "  Anleitung: docs/06-paperless-onedrive.md, dann setup.sh erneut"
+		note "Sicherung und OneDrive laufen noch NICHT."
+		info "  Nachholen: sudo ./setup.sh erneut starten, Schritt 7."
+		info "  Was dabei passiert: docs/06-paperless-onedrive.md"
 	fi
 fi
 
@@ -1719,6 +1937,15 @@ if (( USE_DOCS )) && [[ -n ${PW:-} ]]; then
 	printf '  Benutzer: %s\n  Passwort: %s\n' "$(env_get PAPERLESS_ADMIN_USER)" "$PW"
 fi
 
+if (( CRYPT_NEW )); then
+	printf '\n%sSchluessel der verschluesselten Sicherung%s\n' "$B" "$N"
+	printf '  Passwort: %s\n' "$(env_get RCLONE_CRYPT_PASSWORD)"
+	printf '  Salt:     %s\n' "$(env_get RCLONE_CRYPT_SALT)"
+	printf '  %sJetzt sofort in den Passwortmanager.%s Ohne diese zwei Zeilen ist das\n' "$Y" "$N"
+	printf '  Backup unwiederbringlich verloren. Sie stehen auch in der .env, und die\n'
+	printf '  liegt auf genau dem Rechner, den das Backup absichern soll.\n'
+fi
+
 printf '\n%sNaechste Schritte%s\n' "$B" "$N"
 n=1
 printf '  %d. Ab- und wieder anmelden, dann brauchst du kein sudo mehr fuer docker.\n' $((n++))
@@ -1756,7 +1983,12 @@ if [[ -z $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]]; then
 fi
 (( ! USE_TORRENT )) && printf '  %d. Torrents spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
 (( ! USE_DOCS ))    && printf '  %d. Paperless spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
-(( USE_DOCS ))      && printf '  %d. OneDrive anbinden: docs/06-paperless-onedrive.md\n' $((n++))
+if (( USE_ONEDRIVE )); then
+	printf '  %d. Scan vom Handy in OneDrive nach %s legen, fuenf Minuten warten.\n' $((n++)) "$(env_get RCLONE_INBOX_PATH)"
+	printf '     Unterordner darin werden in Paperless zu Tags.\n'
+elif (( USE_DOCS )); then
+	printf '  %d. OneDrive nachruesten: sudo ./setup.sh erneut starten.\n' $((n++))
+fi
 
 if ((${#PROBLEMS[@]})); then
 	printf '\n%sDas hat nicht geklappt%s\n' "$Y" "$N"

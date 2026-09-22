@@ -40,73 +40,56 @@ OneDrive:/Paperless/Spiegel  ◄── rclone sync (Klartext) ──────
 OneDrive:/Paperless/Backup   ◄── rclone sync (verschluesselt) ───────── export/
 ```
 
-## Schritt 1: rclone mit OneDrive verbinden
+## Einrichtung
 
-Das muss als **dein Desktop-Benutzer** laufen, weil die OAuth-Anmeldung
-einen Browser öffnet. Mint hat einen, das ist hier praktisch.
+Das macht `sudo ./setup.sh` in Schritt 7. Ein einziger Handgriff bleibt bei
+dir: die Anmeldung bei Microsoft läuft über OAuth im Browser, und ein
+Passwortfeld lässt sich nicht automatisieren.
 
-```bash
-rclone config
-```
+Was das Skript selbst erledigt:
 
-- `n` für einen neuen Remote
-- Name: `onedrive`
-- Storage: `onedrive`
-- `client_id` und `client_secret` leer lassen
-- Region: `global`
-- Beim Kontotyp **OneDrive Personal** wählen, nicht Business
-- `y` für die Browser-Anmeldung, dort mit dem privaten Konto anmelden
-- Das angebotene Laufwerk bestätigen
+| | |
+|---|---|
+| rclone installieren | aus der Paketquelle, bei zu alter Version über rclone.org |
+| Remote `onedrive` | startet die Anmeldung, du bestätigst im Browser |
+| Remote `onedrive-crypt` | Passwort und Salt erzeugt es selbst |
+| Ordner in OneDrive | `Scans/` und `Paperless/` |
+| `/etc/rclone/rclone.conf` | Kopie für die Timer, Rechte `600` |
+| Die drei Timer | `enable --now`, passend zu dem, was du eingerichtet hast |
 
-Testen:
+Bei der Anmeldung fragt rclone drei Dinge:
 
-```bash
-rclone lsd onedrive:
-rclone mkdir onedrive:Scans
-rclone mkdir onedrive:Paperless
-```
+- **Kontotyp**: `OneDrive Personal`, nicht Business und nicht SharePoint
+- **Region**: `global`
+- **Laufwerk**: das angebotene bestätigen
 
-## Schritt 2: Das verschlüsselte Remote anlegen
+Öffnet sich kein Browser, steht im Text eine Adresse mit
+`127.0.0.1:53682`. Die kopierst du in einen Browser **auf diesem Rechner**,
+denn rclone wartet lokal auf die Antwort.
 
-```bash
-rclone config
-```
+### Der Schlüssel für das verschlüsselte Backup
 
-- `n`, Name: `onedrive-crypt`
-- Storage: `crypt`
-- `remote`: `onedrive:Paperless/Verschluesselt`
-- **Dateinamen verschlüsseln**: `standard`
-- **Verzeichnisnamen verschlüsseln**: `true`
-- Passwort: eigenes vergeben, oder `g` für ein generiertes
-- Salt (zweites Passwort): ebenfalls setzen
+Am Ende zeigt das Skript Passwort und Salt des Remotes `onedrive-crypt` an,
+**genau einmal**.
 
-> **Dieses Passwort und das Salt gehören in deinen Passwortmanager, jetzt
-> sofort.** Ohne sie ist das Backup unwiederbringlich verloren. Ein
-> verschlüsseltes Backup, dessen Schlüssel nur auf dem Server liegt, den es
-> absichern soll, ist kein Backup.
+> **Beides gehört sofort in deinen Passwortmanager.** Ohne die zwei Werte ist
+> das verschlüsselte Backup unwiederbringlich verloren. Sie stehen zwar auch
+> in der `.env`, aber die liegt auf genau dem Rechner, den das Backup
+> absichern soll. Ein Backup, dessen Schlüssel nur dort liegt, ist keines.
 
-## Schritt 3: Konfiguration für die Timer bereitstellen
+Beim nächsten Lauf passiert nichts doppelt: besteht das Remote schon, bleibt
+es samt Passwort unangetastet.
 
-Die systemd-Units laufen als root, deine rclone-Konfiguration liegt aber in
-deinem Home. Einmal kopieren:
+### Die nächtliche Vollsicherung
 
-```bash
-sudo mkdir -p /etc/rclone
-sudo cp ~/.config/rclone/rclone.conf /etc/rclone/rclone.conf
-sudo chmod 600 /etc/rclone/rclone.conf
-sudo rclone --config /etc/rclone/rclone.conf lsd onedrive:   # Gegenprobe
-```
+Nach der Anmeldung fragt das Skript separat, ob `mediastack-backup.timer`
+laufen soll. Der Grund für die Rückfrage: dieser Lauf **hält um 04:30 für ein
+paar Minuten alle Container an**, sonst erwischt `tar` die Datenbanken mitten
+im Schreiben. Wer nachts zuschaut, merkt das.
 
-Nach jeder Änderung an den Remotes musst du das wiederholen. Das ist der
-Preis dafür, dass die Timer als Systemdienst laufen und nicht an deiner
-Desktop-Sitzung hängen.
-
-## Schritt 4: Timer aktivieren
+### Was danach läuft
 
 ```bash
-sudo systemctl enable --now paperless-inbox.timer
-sudo systemctl enable --now paperless-export.timer
-sudo systemctl enable --now mediastack-backup.timer
 systemctl list-timers 'paperless-*' 'mediastack-*'
 ```
 
@@ -122,6 +105,50 @@ Einen Lauf von Hand anstoßen und zusehen:
 sudo systemctl start paperless-inbox.service
 journalctl -u paperless-inbox.service -f
 ```
+
+## Von Hand, falls du es lieber selbst machst
+
+Der Weg ohne `setup.sh`, und zugleich die Erklärung, was das Skript tut.
+
+```bash
+rclone config
+```
+
+Als **dein Desktop-Benutzer**, nicht als root: die OAuth-Anmeldung öffnet
+einen Browser, und root hat keine Sitzung, in der einer aufgehen könnte.
+
+- `n` für einen neuen Remote, Name `onedrive`, Storage `onedrive`
+- `client_id` und `client_secret` leer lassen, Region `global`
+- Kontotyp **OneDrive Personal**, danach das Laufwerk bestätigen
+
+Dann das verschlüsselte Remote darüber:
+
+```bash
+rclone config create onedrive-crypt crypt \
+    remote="onedrive:Paperless/Verschluesselt" \
+    filename_encryption=standard \
+    directory_name_encryption=true \
+    password="<eigenes Passwort>" \
+    password2="<eigenes Salt>" \
+    --obscure
+```
+
+`--obscure` sorgt dafür, dass rclone die beiden Werte verschlüsselt ablegt
+statt im Klartext. Beide gehören trotzdem in den Passwortmanager, siehe oben.
+
+Zuletzt die Konfiguration für die Timer bereitstellen, die als root laufen
+und deshalb nicht in dein Home schauen:
+
+```bash
+sudo install -d -m 700 /etc/rclone
+sudo install -m 600 ~/.config/rclone/rclone.conf /etc/rclone/rclone.conf
+sudo rclone --config /etc/rclone/rclone.conf lsd onedrive:   # Gegenprobe
+sudo systemctl enable --now paperless-inbox.timer paperless-export.timer
+sudo systemctl enable --now mediastack-backup.timer
+```
+
+**Nach jeder Änderung an den Remotes musst du die Kopie erneuern.** Oder
+einfach `sudo ./setup.sh` laufen lassen, das macht genau das.
 
 ## Der Arbeitsablauf im Alltag
 
@@ -145,6 +172,10 @@ vom Handy gerade erst halb hochgeladen ist.
 Der Ernstfall, einmal durchgespielt. Paperless ist offiziell so gebaut, dass
 der Export vollständig ist: Dokumente, Metadaten, Tags, Korrespondenten,
 Benutzer.
+
+Auf einem frischen Rechner brauchst du zuerst das Remote `onedrive-crypt`
+zurück, und dafür Passwort und Salt aus deinem Passwortmanager. Das ist der
+Moment, für den du sie dort abgelegt hast.
 
 ```bash
 # 1. Backup herunterladen (verschluesselt, rclone entschluesselt beim Lesen)

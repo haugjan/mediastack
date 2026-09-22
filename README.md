@@ -49,7 +49,7 @@ nötig sind.
 | 4 | Tailscale für den Zugriff von unterwegs (optional) |
 | 5 | Eigene Web-Adressen: Azure-Anmeldung, Zone auswählen, Zugang und DNS-Einträge **automatisch** (optional) |
 | 6 | Torrents über ProtonVPN und Usenet (beide optional) |
-| 7 | Paperless-Dokumentenarchiv (optional) |
+| 7 | Paperless-Dokumentenarchiv, OneDrive verbinden, verschlüsseltes Backup, Timer (optional) |
 | 8 | Plex mit deinem Konto verbinden |
 | 9 | Alles starten, **API-Schlüssel einsammeln**, **die Apps untereinander verkabeln**, VPN und Portweiterleitung gegenprüfen |
 
@@ -57,6 +57,13 @@ Schritt 2 ist der einzige, der hart abbricht. Können auf dem gewählten Pfad
 keine Hardlinks angelegt werden, würde jeder fertige Download kopiert statt
 verlinkt: doppelter Platzverbrauch, und das Weitergeben von Torrents endet
 sofort. NTFS, exFAT und Netzlaufwerke können das nicht.
+
+In Schritt 7 bleibt genau ein Handgriff bei dir: die Anmeldung bei Microsoft
+läuft über OAuth im Browser. Den Rest macht das Skript — rclone einrichten,
+das verschlüsselte Remote samt Schlüssel anlegen, die Ordner in OneDrive
+erzeugen, die Konfiguration nach `/etc/rclone` legen und die Timer
+einschalten. Den Schlüssel des Backups zeigt es am Ende einmal an, und der
+gehört sofort in deinen Passwortmanager.
 
 Schritt 9 erspart dir das Abtippen von sechs API-Schlüsseln. Die Apps legen
 sie beim ersten Start selbst an, das Skript liest sie aus deren
@@ -140,7 +147,8 @@ deiner lokalen `.env` unter `BASE_DOMAIN`, und die ist von Git ausgeschlossen.
 
 ## Dokumente und OneDrive
 
-Zwei Einbahnstraßen statt eines Abgleichs:
+Richtet `setup.sh` in Schritt 7 ein. Zwei Einbahnstraßen statt eines
+Abgleichs:
 
 ```
 OneDrive:/Scans ──► consume/ ──► Paperless ──► media/  (bleibt lokal)
