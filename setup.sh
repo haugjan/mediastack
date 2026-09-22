@@ -750,7 +750,8 @@ else
 	echo "  Ein normales Spotify-Konto genuegt, kein Abo."
 	echo
 	echo "    https://developer.spotify.com/dashboard  ->  Create app"
-	echo "    Redirect URI: http://localhost:8686 , API: Web API"
+	echo "    Redirect URI: http://127.0.0.1:8686/callback , API: Web API"
+	echo "    (die IP, nicht localhost: das lehnt Spotify als unsicher ab)"
 	echo
 	if ask_yn "Spotify-Zugangsdaten jetzt eintragen?" n; then
 		sid="$(ask 'Client ID')"

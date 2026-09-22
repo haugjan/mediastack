@@ -126,7 +126,13 @@ ist kostenlos und in zwei Minuten erledigt:
 1. [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
    mit deinem normalen Spotify-Konto öffnen, **Create app**
 2. Name und Beschreibung frei wählen, als Redirect URI genügt
-   `http://localhost:8686`, API auswählen: **Web API**
+   `http://127.0.0.1:8686/callback`, API auswählen: **Web API**
+
+   Die Redirect-URI muss die **IP** sein. Spotify verlangt seit 2025 eine
+   sichere Adresse und laesst von unverschlüsselten nur die Loopback-IPs
+   durch, nicht den Namen `localhost` — sonst kommt „This redirect URI is
+   not secure". Für Tubifarry ist der Wert ohnehin bedeutungslos: das
+   Plugin meldet sich nur mit ID und Secret an, ein Redirect kommt nie vor.
 3. Client ID und Client Secret kopieren
 4. `sudo ./setup.sh` starten und bei der Frage einsetzen
 
