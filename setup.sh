@@ -727,6 +727,7 @@ if (( ! USE_USENET )); then
 		info "Uebersprungen."
 	fi
 fi
+
 # Musik braucht weder Tracker noch Abo: Lidarr holt sie mit dem Plugin
 # Tubifarry von YouTube. Der Haken ist unsichtbar, wenn man ihn nicht kennt.
 # Tubifarry schlaegt jedes Album zuerst ueber die Spotify-API nach und sucht
@@ -1362,6 +1363,7 @@ if (( CLIENTS )); then
 elif (( CLIENTS_DA )); then
 	ok "Download-Clients stehen bereits"
 fi
+
 # --- Lidarr: Musik ueber YouTube (Plugin Tubifarry)
 # Das Plugin holt Lidarr selbst aus GitHub, danach muss es einmal neu
 # starten, sonst kennt es die neuen Quellen nicht. Der Indexer braucht die
