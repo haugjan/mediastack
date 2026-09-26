@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Xml.Linq;
 using Mediathekarr.Data;
 
@@ -14,7 +13,7 @@ namespace Mediathekarr.Services;
 // Download-Client muesste deren komplette API mitspielen und braeche bei
 // jeder Aenderung daran.
 public sealed class BlackholeWatcher(
-    Settings cfg, Database db, IHttpClientFactory httpFactory, ILogger<BlackholeWatcher> log)
+    Settings cfg, Database db, Fetcher fetcher, ILogger<BlackholeWatcher> log)
     : BackgroundService
 {
     private static readonly string[] Kinds = ["tv", "movies"];
@@ -73,9 +72,9 @@ public sealed class BlackholeWatcher(
         long bytes;
         try
         {
-            bytes = await DownloadAsync(release.VideoUrl, file, ct);
+            bytes = await fetcher.DownloadAsync(release.VideoUrl, file, ct);
             if (!string.IsNullOrWhiteSpace(release.SubtitleUrl))
-                await SubtitleAsync(release.SubtitleUrl, Path.Combine(temp, release.Name + ".ger.srt"), ct);
+                await fetcher.SubtitleAsync(release.SubtitleUrl, Path.Combine(temp, release.Name + ".ger.srt"), ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -90,44 +89,6 @@ public sealed class BlackholeWatcher(
         File.Delete(nzbPath);
         db.FinishJob(job, "fertig", bytes);
         log.LogInformation("Fertig: {Name} ({MB} MB)", release.Name, bytes / 1_000_000);
-    }
-
-    private async Task<long> DownloadAsync(string url, string path, CancellationToken ct)
-    {
-        var http = httpFactory.CreateClient("download");
-        using var res = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-        res.EnsureSuccessStatusCode();
-        await using var src = await res.Content.ReadAsStreamAsync(ct);
-        await using var dst = File.Create(path);
-        await src.CopyToAsync(dst, ct);
-        return dst.Length;
-    }
-
-    // Die Sender liefern TTML oder VTT. Plex und Bazarr wollen SRT, und
-    // ffmpeg wandelt das ohne Umschweife um. Klappt es nicht, ist der
-    // Mitschnitt trotzdem brauchbar - deshalb nur eine Warnung.
-    private async Task SubtitleAsync(string url, string srtPath, CancellationToken ct)
-    {
-        var raw = Path.ChangeExtension(srtPath, ".quelle");
-        try
-        {
-            await DownloadAsync(url, raw, ct);
-            var p = Process.Start(new ProcessStartInfo("ffmpeg",
-                $"-hide_banner -loglevel error -y -i \"{raw}\" \"{srtPath}\"") { RedirectStandardError = true });
-            if (p is not null)
-            {
-                await p.WaitForExitAsync(ct);
-                if (p.ExitCode != 0) log.LogDebug("Untertitel liessen sich nicht umwandeln");
-            }
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            log.LogDebug("Untertitel uebersprungen: {Fehler}", e.Message);
-        }
-        finally
-        {
-            if (File.Exists(raw)) File.Delete(raw);
-        }
     }
 
     // Unsere Id steht im Kopf der .nzb. Der Rest der Datei ist nur da,

@@ -69,13 +69,7 @@ public sealed class SearchService(
 
     private Release Make(string name, int category, MediathekItem item)
     {
-        // Die Id muss stabil sein: dieselbe Sendung soll nach einem
-        // Neustart dieselbe Id haben, sonst zeigt eine alte .nzb ins Leere.
-        var id = Convert.ToHexString(
-            System.Security.Cryptography.MD5.HashData(
-                System.Text.Encoding.UTF8.GetBytes(item.BestUrl)))[..16].ToLowerInvariant();
-
-        var r = new Release(id, name, category, item.Size, item.Published,
+        var r = new Release(item.Id, name, category, item.Size, item.Published,
             item.BestUrl, item.UrlSubtitle, item.Channel);
         db.Remember(r);
         return r;

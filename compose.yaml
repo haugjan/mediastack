@@ -474,6 +474,10 @@ services:
       TZ: ${TZ}
       MEDIATHEKARR_BLACKHOLE: /data/mediathek/blackhole
       MEDIATHEKARR_COMPLETE: /data/mediathek/complete
+      # Direkt-Downloads aus der Oberflaeche, fuer die Plex-Bibliothek
+      # "Mediathek". Unter /media, weil sie dort bleiben, statt wie die
+      # Blackhole-Dateien von Sonarr oder Radarr abgeholt zu werden.
+      MEDIATHEKARR_LIBRARY: /data/media/mediathek
       MEDIATHEKARR_DB: /config/mediathekarr.db
       MEDIATHEKARR_MIN_DURATION: ${MEDIATHEKARR_MIN_DURATION:-600}
       MEDIATHEKARR_CHANNELS: ${MEDIATHEKARR_CHANNELS:-}

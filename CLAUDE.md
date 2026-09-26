@@ -187,6 +187,15 @@ Eine leere Suchanfrage liefert bewusst die jüngsten Sendungen: Genau damit
 prüft Prowlarr einen neuen Indexer, und ohne Antwort verweigert es das
 Anlegen.
 
+Daneben gibt es einen zweiten, eigenständigen Weg: **Stöbern und
+Direkt-Download** in der Oberfläche. Der geht an keine App, sondern nach
+`/data/media/mediathek` in die Plex-Bibliothek „Mediathek" (Personal Media,
+Scanner „Plex Video Files"). Zwei Dinge dazu: SRF liefert **HLS**, also
+`.m3u8` — `Fetcher` setzt das per `ffmpeg -c copy` zusammen, ein blosser
+HTTP-Download ergäbe vier Kilobyte Text als `.mp4`. Und MediathekViewWeb
+führt viele Sendungen **doppelt** unter zwei Adressen; beim Stöbern wird nach
+Sender, Sendung, Titel und Sendezeit zusammengefasst.
+
 Beide Ordner — Blackhole und Fertig — liegen unter `/data`, sonst kopiert der
 Import statt zu verlinken.
 

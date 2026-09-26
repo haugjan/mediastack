@@ -75,10 +75,43 @@ Rückfall, nicht die erste Wahl — aber ein Rückfall, den niemand sperrt.
 
 ## Bedienung
 
-Unter `https://mediathek.example.com` oder `http://<ip>:8098` siehst du, was
-abgeholt wurde, und kannst eine Suche ausprobieren: Dort steht genau das, was
-Sonarr und Radarr angeboten bekämen. Gesteuert wird der Dienst aus den Apps
-heraus, die Oberfläche liest nur mit.
+Die Oberfläche unter `https://mediathek.example.com` oder `http://<ip>:8098`
+ist aufgebaut wie Sonarr und hat vier Seiten:
+
+- **Stöbern.** Links die einzelnen Mediatheken (ARD, ZDF, SRF, ORF …), rechts
+  ihre neuesten Sendungen. Oben suchst du in der gewählten Mediathek, ein
+  Klick auf den Sendungsnamen zeigt nur diese Reihe. *Laden* holt eine
+  Sendung sofort, mehrere gehen über die Kästchen links und *Herunterladen*.
+  Kürzer als zehn Minuten wird ausgeblendet, *Auch kurze Beiträge* zeigt
+  Nachrichten und Ausschnitte trotzdem.
+- **Downloads.** Was läuft, mit Fortschritt, und was Sonarr und Radarr über
+  den Blackhole abgeholt haben.
+- **Indexer-Test.** Genau das, was Sonarr und Radarr bei einer Suche angeboten
+  bekämen, samt Release-Namen.
+- **System.** Ordner und Einstellungen.
+
+## Direkt-Download und die Plex-Bibliothek „Mediathek"
+
+Was du beim Stöbern selbst lädst, gehört zu keiner Serie in Sonarr und zu
+keinem Film in Radarr: Dokus, Reportagen, einzelne Sendungen. Es landet
+deshalb in einem eigenen Ordner, sortiert nach Sender und Sendung:
+
+```
+/data/media/mediathek/SRF/Potzmusig/Potzmusig - Mit dabei am … (2026-09-26).mp4
+```
+
+`setup.sh` legt dafür in Plex die Bibliothek **Mediathek** an, als „Andere
+Videos". Plex zeigt die Sendungen dort so, wie sie heißen, statt sie einem
+falschen Film zuzuordnen. Während des Ladens heißt die Datei `.teil`, damit
+Plex keine halbe Datei einliest.
+
+Die Warteschlange lebt im Speicher: Startet der Dienst währenddessen neu,
+stehen offene Downloads als *Abgebrochen* da und müssen neu angestoßen werden.
+
+SRF liefert seine Videos nicht als Datei, sondern als Wiedergabeliste (HLS).
+Mediathekarr setzt sie mit `ffmpeg` ohne Neukodierung zu einer MP4 zusammen,
+das dauert etwas länger als ein normaler Download. Untertitel gibt es bei SRF
+vorerst keine: SRF liefert sie in einem XML-Format, das `ffmpeg` nicht kennt.
 
 ## Wenn nichts gefunden wird
 

@@ -72,14 +72,14 @@ public sealed class Database
             DateTimeOffset.FromUnixTimeSeconds(r.GetInt64(4)), r.GetString(5), r.GetString(6), r.GetString(7));
     }
 
-    public long AddJob(string releaseId, string name, string category)
+    public long AddJob(string releaseId, string name, string category, string status = "laeuft")
     {
         using var c = Open();
         Exec(c, """
             INSERT INTO jobs (release_id,release_name,category,status,created)
-            VALUES ($i,$n,$c,'laeuft',$t);
+            VALUES ($i,$n,$c,$s,$t);
             """,
-            ("$i", releaseId), ("$n", name), ("$c", category),
+            ("$i", releaseId), ("$n", name), ("$c", category), ("$s", status),
             ("$t", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT last_insert_rowid()";
@@ -91,6 +91,21 @@ public sealed class Database
         using var c = Open();
         Exec(c, "UPDATE jobs SET status=$s, bytes=$b, error=$e WHERE rowid=$r",
             ("$s", status), ("$b", bytes), ("$e", error), ("$r", rowId));
+    }
+
+    public void SetJobStatus(long rowId, string status)
+    {
+        using var c = Open();
+        Exec(c, "UPDATE jobs SET status=$s WHERE rowid=$r", ("$s", status), ("$r", rowId));
+    }
+
+    // Nur die Direkt-Downloads: ihre Warteschlange lebt im Speicher und ist
+    // nach einem Neustart weg. Auftraege aus dem Blackhole haengen an ihrer
+    // .nzb und werden ohnehin neu aufgenommen.
+    public void AbortOpenJobs()
+    {
+        using var c = Open();
+        Exec(c, "UPDATE jobs SET status='abgebrochen' WHERE category='direkt' AND status IN ('wartet','laeuft')");
     }
 
     public IReadOnlyList<Job> Jobs(int limit = 50)

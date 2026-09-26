@@ -11,6 +11,11 @@ public sealed class Settings
     public string CompleteRoot { get; init; } = Env("MEDIATHEKARR_COMPLETE", "/data/mediathek/complete");
     public string DbPath { get; init; } = Env("MEDIATHEKARR_DB", "/config/mediathekarr.db");
 
+    // Wohin Sendungen gehen, die man in der Oberflaeche selbst herunterlaedt.
+    // Ein eigener Ordner mit eigener Plex-Bibliothek: Dokus und Einzel-
+    // sendungen passen weder zu Sonarr noch zu Radarr.
+    public string LibraryRoot { get; init; } = Env("MEDIATHEKARR_LIBRARY", "/data/media/mediathek");
+
     // Die oeffentliche API von MediathekViewWeb. Sie fasst die Mediatheken
     // von ARD, ZDF, SRF, ORF und weiteren zusammen.
     public string ApiUrl { get; init; } = Env("MEDIATHEKARR_API", "https://mediathekviewweb.de/api/query");

@@ -15,11 +15,23 @@ builder.Services.AddHttpClient("download", c => c.Timeout = TimeSpan.FromHours(2
 builder.Services.AddHttpClient<MediathekViewClient>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient<ArrClient>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton<SearchService>();
+builder.Services.AddSingleton<Fetcher>();
+builder.Services.AddSingleton<DirectDownloader>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<DirectDownloader>());
 builder.Services.AddHostedService<BlackholeWatcher>();
+// Zustaende und Zeiten als lesbare Werte statt Zahlen.
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 
 var app = builder.Build();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// "no-cache" heisst "vor Gebrauch nachfragen", nicht "nie speichern". Ohne
+// die Angabe setzt der Browser nach einem Update das alte Stylesheet auf die
+// neue Seite. Die Nachfrage kostet dank ETag nur ein 304.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "no-cache",
+});
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
@@ -56,17 +68,62 @@ app.MapGet("/nzb/{id}", (string id, Database db) =>
     return Results.File(Encoding.UTF8.GetBytes(Nzb(r)), "application/x-nzb", r.Name + ".nzb");
 });
 
-// Fuer die Oberflaeche.
-app.MapGet("/api/status", (Database db) => Results.Ok(new
+// ------------------------------------------------------------ Oberflaeche
+
+app.MapGet("/api/status", (Database db, DirectDownloader direct) => Results.Ok(new
 {
-    jobs = db.Jobs().Select(j => new
-    {
-        j.ReleaseName, j.Category, j.Status, j.Error,
-        mb = j.Bytes / 1_000_000,
-        created = j.Created.ToLocalTime().ToString("dd.MM. HH:mm"),
-    }),
+    version = typeof(Settings).Assembly.GetName().Version?.ToString(3),
+    sender = cfg.Channels,
+    mindestdauer = cfg.MinDurationSeconds,
+    pfade = new { bibliothek = cfg.LibraryRoot, blackhole = cfg.BlackholeRoot, fertig = cfg.CompleteRoot },
+    quelle = cfg.ApiUrl,
+    laufend = direct.Running.Count,
 }));
 
+// Stoebern: die neuesten Sendungen einer Mediathek, seitenweise.
+app.MapGet("/api/browse", async (string? channel, string? topic, string? q, int? offset, int? size,
+                                 bool? kurz, MediathekViewClient mediathek, DirectDownloader direct,
+                                 CancellationToken ct) =>
+{
+    var (items, total, next) = await mediathek.BrowseAsync(channel, topic, q, Math.Max(0, offset ?? 0),
+        Math.Clamp(size ?? 50, 1, 200), kurz == true, ct);
+    direct.Remember(items);
+    return Results.Ok(new
+    {
+        total,
+        weiter = next,
+        items = items.Select(i => new
+        {
+            i.Id, i.Channel, i.Topic, i.Title, i.Description,
+            published = i.Published, i.Duration, i.Size,
+            hd = !string.IsNullOrWhiteSpace(i.UrlVideoHd),
+            untertitel = !string.IsNullOrWhiteSpace(i.UrlSubtitle),
+            vorhanden = direct.Exists(i),
+            laedt = direct.IsPending(i.Id),
+        }),
+    });
+});
+
+app.MapPost("/api/downloads", (DownloadInput input, DirectDownloader direct) =>
+{
+    var (queued, present, unknown) = direct.Enqueue(input.Ids ?? []);
+    return Results.Ok(new { eingereiht = queued, vorhanden = present, unbekannt = unknown });
+});
+
+app.MapGet("/api/downloads", (Database db, DirectDownloader direct) =>
+    Results.Ok(db.Jobs(200).Select(j =>
+    {
+        direct.Running.TryGetValue(j.RowId, out var p);
+        return new
+        {
+            id = j.RowId, name = j.ReleaseName, art = j.Category, status = j.Status,
+            fehler = j.Error, bytes = p?.Done ?? j.Bytes, gesamt = p?.Total ?? 0,
+            erstellt = j.Created,
+        };
+    })));
+
+// Was Sonarr und Radarr bei einer Suche angeboten bekaemen. Zum Ausprobieren,
+// ob eine Sendung ueberhaupt gefunden wird.
 app.MapGet("/api/search", async (string q, SearchService search, CancellationToken ct) =>
     Results.Ok((await search.FreeAsync(q, ct)).Select(r => new { r.Name, r.Channel, mb = r.Size / 1_000_000 })));
 
@@ -144,3 +201,5 @@ static string Nzb(Release r)
                         new XAttribute("bytes", r.Size), new XAttribute("number", 1), r.Id)))));
     return doc.ToString();
 }
+
+internal sealed record DownloadInput(string[]? Ids);

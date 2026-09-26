@@ -523,7 +523,7 @@ mkdir -p \
 	"$DATA_ROOT"/torrents/{movies,tv,music,books} \
 	"$DATA_ROOT"/usenet/incomplete \
 	"$DATA_ROOT"/usenet/complete/{movies,tv,music,books} \
-	"$DATA_ROOT"/media/{movies,tv,music,audiobooks,books} \
+	"$DATA_ROOT"/media/{movies,tv,music,audiobooks,books,mediathek} \
 	"$DATA_ROOT"/youtube \
 	"$DATA_ROOT"/aircheck \
 	"$DATA_ROOT"/mediathek/blackhole/{tv,movies} \
@@ -2316,9 +2316,15 @@ if [[ -n $PLEX_TOKEN_VAL ]]; then
 		http://localhost:32400/library/sections 2>>"$LOG" \
 		| sed -n 's/.*<Location[^>]*path="\([^"]*\)".*/\1/p')"
 	LIBS=0
-	for spec in "Filme${US}movie${US}tv.plex.agents.movie${US}Plex Movie${US}/data/media/movies" \
-	            "Serien${US}show${US}tv.plex.agents.series${US}Plex TV Series${US}/data/media/tv" \
-	            "Musik${US}artist${US}tv.plex.agents.music${US}Plex Music${US}/data/media/music"; do
+	PLEX_LIBS=("Filme${US}movie${US}tv.plex.agents.movie${US}Plex Movie${US}/data/media/movies"
+	           "Serien${US}show${US}tv.plex.agents.series${US}Plex TV Series${US}/data/media/tv"
+	           "Musik${US}artist${US}tv.plex.agents.music${US}Plex Music${US}/data/media/music")
+	# Was man in Mediathekarr selbst herunterlaedt, hat keine Serie und keinen
+	# Film dahinter. "Personal Media" nimmt es so, wie es heisst, statt es
+	# einem falschen Film zuzuordnen; der passende Scanner ist "Plex Video
+	# Files", mit dem Filme-Scanner lehnt Plex die Kombination ab.
+	want mediathek && PLEX_LIBS+=("Mediathek${US}movie${US}tv.plex.agents.none${US}Plex Video Files${US}/data/media/mediathek")
+	for spec in "${PLEX_LIBS[@]}"; do
 		IFS="$US" read -r name type agent scanner path <<<"$spec"
 		grep -qxF "$path" <<<"$have" && continue
 		curl -sS -o /dev/null --max-time 30 -X POST -H "X-Plex-Token: $PLEX_TOKEN_VAL" \

@@ -1,31 +1,44 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mediathekarr</title>
+<title>mediathekarr</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
-<link rel="icon" href="favicon.svg">
 </head>
 <body>
-<header>
-  <h1>Mediathekarr</h1>
-  <span>Die Mediatheken von ARD, ZDF, SRF und ORF als Quelle für Sonarr und Radarr</span>
+<!-- Aufbau wie Sonarr und wie aircheckarr: Kopfleiste, Seitenleiste links,
+     Werkzeugleiste ueber dem Inhalt. Gezeichnet wird alles von app.js. -->
+<header class="kopf">
+  <button class="menue" id="menue" aria-label="Menü" title="Menü">
+    <svg class="sym" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+  </button>
+  <a class="marke" href="#/stoebern">
+    <img src="favicon.svg" alt="" width="32" height="32">
+    <span>mediathekarr</span>
+  </a>
+  <label class="suche">
+    <svg class="sym" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input id="suche" type="search" placeholder="Suchen" autocomplete="off" spellcheck="false">
+  </label>
+  <span class="verbindung" id="verbindung" hidden>Keine Verbindung</span>
 </header>
-<main>
-  <section>
-    <h2>Suche ausprobieren</h2>
-    <form id="suchform">
-      <input id="suche" placeholder="Tatort, Dok, Filmtitel …" autocomplete="off">
-      <button type="submit">Suchen</button>
-    </form>
-    <div id="treffer" class="leer">Hier siehst du, was Sonarr und Radarr angeboten bekämen.</div>
-  </section>
-  <section>
-    <h2>Abgeholt</h2>
-    <div id="auftraege" class="leer">Noch nichts abgeholt.</div>
-  </section>
+
+<aside class="leiste" id="leiste">
+  <nav id="navigation"></nav>
+</aside>
+<div class="leiste-schatten" id="leiste-schatten"></div>
+
+<main class="seite">
+  <div class="werkzeug" id="werkzeug"></div>
+  <div class="inhalt" id="inhalt"></div>
 </main>
+
+<div class="auswahl" id="auswahl" hidden></div>
+<div class="dialog-huelle" id="dialog" hidden></div>
+<div class="meldungen" id="meldungen" aria-live="polite"></div>
+
 <script src="app.js"></script>
 </body>
 </html>
