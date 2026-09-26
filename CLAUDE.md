@@ -174,14 +174,21 @@ stillschweigend verfällt.
 ## Prüfen vor dem Commit
 
 Die CI (`.github/workflows/release.yml`) läuft bei jedem Push und PR. Lokal
-gibt es `docker` und `python3`, aber **kein shellcheck**:
+gibt es `docker` und `python3`, aber kein `shellcheck` — das holt man sich als
+Container, sonst fällt genau diese Prüfung erst in der Pipeline auf:
 
 ```bash
 bash -n setup.sh && for f in scripts/*.sh; do bash -n "$f"; done
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
+  -S error setup.sh scripts/*.sh          # blockierend, muss leer bleiben
 python3 -m py_compile scripts/backfill.py
 sed 's/^\([A-Z_]*\)=$/\1=dummy/' .env.example > /tmp/s.env
 docker compose --env-file /tmp/s.env config -q
 ```
+
+Der Klassiker, den `bash -n` nicht sieht: `"$G[x]$N"` hält ShellCheck für
+einen Array-Zugriff (SC1087, Fehlerstufe). Farbvariablen vor einer eckigen
+Klammer gehören in geschweifte: `"${G}[x]${N}"`.
 
 Was die CI außerdem zusichert, und was man deshalb nicht kaputtmachen darf:
 Profile schirmen die optionalen Dienste ab (ohne Profile ≥ 15 Dienste, aber

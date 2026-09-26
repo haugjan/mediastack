@@ -315,10 +315,13 @@ show_choice() {
 		i=$((i + 1))
 		if [[ ${GRP_OF[$k]} != "$grp" ]]; then
 			grp="${GRP_OF[$k]}"
-			[[ $grp == dienst ]] && printf '\n  %sDienste%s\n' "$B" "$N" \
-			                     || printf '\n  %sOptionen%s\n' "$B" "$N"
+			if [[ $grp == dienst ]]; then
+				printf '\n  %sDienste%s\n' "$B" "$N"
+			else
+				printf '\n  %sOptionen%s\n' "$B" "$N"
+			fi
 		fi
-		if want "$k"; then mark="$G[x]$N"; else mark="$D[ ]$N"; fi
+		if want "$k"; then mark="${G}[x]${N}"; else mark="${D}[ ]${N}"; fi
 		printf '  %2d %b %-20s %s%s%s\n' "$i" "$mark" "${NAME_OF[$k]}" "$D" "${DESC_OF[$k]}" "$N"
 	done
 }
