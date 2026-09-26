@@ -20,9 +20,16 @@ namespace Aircheckarr.Services;
 /// </summary>
 public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
 {
-    /// <summary>Ein fertig mitgeschnittener Titel.</summary>
+    /// <summary>
+    /// Ein fertig mitgeschnittener Titel samt Vor- und Nachlauf. Die beiden
+    /// Marken sagen, an welcher Stelle der Datei die Titelmeldungen kamen;
+    /// daran richtet die Nachbearbeitung den Schnitt aus. In Bytes statt
+    /// Sekunden, weil die gemessene Bitrate nur ungefaehr stimmt; umgerechnet
+    /// wird erst an der wirklichen Laenge der Datei.
+    /// </summary>
     public sealed record Segment(string Artist, string Title, string TempPath,
-                                 DateTime StartedAt, double Seconds);
+                                 DateTime StartedAt, long StartMarkBytes,
+                                 long EndMarkBytes, long TotalBytes);
 
     /// <summary>
     /// Wird bei jedem Titelwechsel gefragt, ob der neue Titel aufgenommen
@@ -30,9 +37,38 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
     /// </summary>
     public delegate long? ShouldRecord(string artist, string title);
 
-    private const int PreRollSeconds = 6;
+    // Die Titelmeldung kommt je nach Sender bis zu zwanzig Sekunden zu spaet
+    // (Encoder-Puffer, Automation meldet erst beim Einblenden). Mit wenigen
+    // Sekunden Vorlauf fehlt dann der halbe erste Refrain, und das ist
+    // nachtraeglich nicht zu retten. Zu viel Ton dagegen schneidet die
+    // Nachbearbeitung einfach weg. Bei 320 kbit/s kosten 45 Sekunden rund
+    // 1,8 MB Speicher je Sender.
+    private const int PreRollSeconds = 45;
 
-    public async Task ListenAsync(
+    // Aus demselben Grund laeuft die Aufnahme nach der naechsten Meldung noch
+    // weiter: der Titel spielt ja genauso verspaetet zu Ende.
+    private const int PostRollSeconds = 20;
+
+    /// <summary>Eine laufende Aufnahme. Mehrere koennen sich ueberlappen.</summary>
+    private sealed class Take
+    {
+        public required FileStream File { get; init; }
+        public required string TempPath { get; init; }
+        public required long WishId { get; init; }
+        public required string Artist { get; init; }
+        public required string Title { get; init; }
+        public required DateTime StartedAt { get; init; }
+        public required long StartMarkBytes { get; init; }
+        public long Bytes { get; set; }
+        public long? EndMarkBytes { get; set; }
+        public long? StopAtBytes { get; set; }
+    }
+
+    /// <returns>
+    /// false, wenn der Sender gar keine Titelmeldungen anbietet. Dann taugt
+    /// er fuer diesen Zweck nicht, und die Aufnahmeleitung merkt ihn sich.
+    /// </returns>
+    public async Task<bool> ListenAsync(
         Data.Station station, string workDir, int bitrateKbps,
         ShouldRecord shouldRecord,
         Func<Segment, long, Task> onSegment,
@@ -51,20 +87,23 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
         {
             // Ohne Metadaten laesst sich nicht schneiden. Das ist kein
             // Fehler des Senders, er taugt nur fuer diesen Zweck nicht.
-            log.LogInformation("{Sender} sendet keine Titelmeldungen, wird uebersprungen",
-                station.Name);
-            return;
+            log.LogInformation("{Sender} sendet keine Titelmeldungen", station.Name);
+            return false;
         }
 
         var bytesPerSecond = Math.Max(bitrateKbps, 64) * 1000 / 8;
         var preRollLimit = bytesPerSecond * PreRollSeconds;
+        var postRollBytes = (long)bytesPerSecond * PostRollSeconds;
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         var audio = new byte[metaInt];
 
         // Vorlauf-Puffer: die letzten Sekunden Ton, als Kette von Stuecken.
+        // Er laeuft auch waehrend einer Aufnahme weiter, denn der naechste
+        // Titel braucht seinen eigenen.
         var preRoll = new Queue<byte[]>();
         var preRollBytes = 0;
+        var takes = new List<Take>();
 
         string? currentArtist = null, currentTitle = null;
         // Der erste gemeldete Titel laeuft beim Verbinden immer schon. Ihn
@@ -72,26 +111,15 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
         // solche Torsi sind der Grund, warum Radiomitschnitte einen
         // schlechten Ruf haben. Also erst ab dem naechsten Wechsel.
         var firstTitleSeen = false;
-        FileStream? recording = null;
-        long? recordingWishId = null;
-        var recordedBytes = 0L;
-        var startedAt = DateTime.UtcNow;
-        string? tempPath = null;
 
-        async Task FinishAsync()
+        async Task FinishAsync(Take t)
         {
-            if (recording is null) return;
-            await recording.FlushAsync(ct);
-            await recording.DisposeAsync();
-            recording = null;
-
-            var seconds = (double)recordedBytes / bytesPerSecond;
-            var seg = new Segment(currentArtist ?? "", currentTitle ?? "",
-                                  tempPath!, startedAt, seconds);
-            await onSegment(seg, recordingWishId!.Value);
-            recordingWishId = null;
-            tempPath = null;
-            recordedBytes = 0;
+            takes.Remove(t);
+            await t.File.FlushAsync(CancellationToken.None);
+            await t.File.DisposeAsync();
+            await onSegment(new Segment(t.Artist, t.Title, t.TempPath, t.StartedAt,
+                                        t.StartMarkBytes, t.EndMarkBytes ?? t.Bytes, t.Bytes),
+                            t.WishId);
         }
 
         try
@@ -100,19 +128,19 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
             {
                 if (!await ReadExactlyAsync(stream, audio, metaInt, ct)) break;
 
-                if (recording is not null)
+                var chunk = audio[..metaInt];
+                preRoll.Enqueue(chunk);
+                preRollBytes += chunk.Length;
+                while (preRollBytes > preRollLimit && preRoll.Count > 1)
+                    preRollBytes -= preRoll.Dequeue().Length;
+
+                foreach (var t in takes)
                 {
-                    await recording.WriteAsync(audio.AsMemory(0, metaInt), ct);
-                    recordedBytes += metaInt;
+                    await t.File.WriteAsync(chunk, ct);
+                    t.Bytes += chunk.Length;
                 }
-                else
-                {
-                    var copy = audio[..metaInt];
-                    preRoll.Enqueue(copy);
-                    preRollBytes += copy.Length;
-                    while (preRollBytes > preRollLimit && preRoll.Count > 1)
-                        preRollBytes -= preRoll.Dequeue().Length;
-                }
+                foreach (var t in takes.Where(t => t.Bytes >= t.StopAtBytes).ToList())
+                    await FinishAsync(t);
 
                 var title = await ReadMetadataAsync(stream, ct);
                 if (title is null) continue;                 // keine Aenderung gemeldet
@@ -123,7 +151,13 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
                 var (artist, name) = split.Value;
                 if (artist == currentArtist && name == currentTitle) continue;
 
-                await FinishAsync();                          // vorherigen Titel abschliessen
+                // Laufende Aufnahmen: hier endet der Titel laut Meldung. Sie
+                // laufen noch um den Nachlauf weiter und werden dann fertig.
+                foreach (var t in takes.Where(t => t.EndMarkBytes is null))
+                {
+                    t.EndMarkBytes = t.Bytes;
+                    t.StopAtBytes = t.Bytes + postRollBytes;
+                }
 
                 currentArtist = artist;
                 currentTitle = name;
@@ -137,38 +171,51 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
                     continue;
                 }
 
-                recordingWishId = shouldRecord(artist, name);
-                if (recordingWishId is null) continue;
+                var wishId = shouldRecord(artist, name);
+                if (wishId is null) continue;
 
                 Directory.CreateDirectory(workDir);
                 // Rohmitschnitt im Codec des Senders. Der Zielcontainer
                 // wird erst in der Nachbearbeitung gewaehlt.
-                tempPath = Path.Combine(workDir,
-                    $"{station.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}.{station.MeasuredCodec ?? "mp3"}");
-                recording = File.Create(tempPath);
-                startedAt = DateTime.UtcNow;
-                recordedBytes = 0;
-
-                // Der Vorlauf ist der Grund, warum der Anfang nicht fehlt.
-                foreach (var chunk in preRoll)
+                var tempPath = Path.Combine(workDir,
+                    $"{station.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}.{station.MeasuredCodec ?? "mp3"}");
+                var take = new Take
                 {
-                    await recording.WriteAsync(chunk, ct);
-                    recordedBytes += chunk.Length;
+                    File = File.Create(tempPath),
+                    TempPath = tempPath,
+                    WishId = wishId.Value,
+                    Artist = artist,
+                    Title = name,
+                    StartedAt = DateTime.UtcNow,
+                    StartMarkBytes = preRollBytes,
+                };
+                // Der Vorlauf ist der Grund, warum der Anfang nicht fehlt.
+                foreach (var piece in preRoll)
+                {
+                    await take.File.WriteAsync(piece, ct);
+                    take.Bytes += piece.Length;
                 }
+                takes.Add(take);
                 log.LogInformation("Mitschnitt gestartet: {Interpret} - {Titel} auf {Sender}",
                     artist, name, station.Name);
             }
+
+            // Der Sender hat aufgelegt. Was schon zu Ende gemeldet war und nur
+            // noch im Nachlauf steckte, ist vollstaendig und wird abgelegt.
+            foreach (var t in takes.Where(t => t.EndMarkBytes is not null).ToList())
+                await FinishAsync(t);
         }
         finally
         {
-            // Ein laufender Mitschnitt beim Abbruch ist unvollstaendig und
-            // wird verworfen, nicht halb in die Bibliothek gelegt.
-            if (recording is not null)
+            // Alles andere ist unvollstaendig und wird verworfen, nicht halb
+            // in die Bibliothek gelegt.
+            foreach (var t in takes)
             {
-                await recording.DisposeAsync();
-                if (tempPath is not null && File.Exists(tempPath)) File.Delete(tempPath);
+                await t.File.DisposeAsync();
+                if (File.Exists(t.TempPath)) File.Delete(t.TempPath);
             }
         }
+        return true;
     }
 
     private static bool TryGetMetaInt(HttpResponseMessage response, out int metaInt)

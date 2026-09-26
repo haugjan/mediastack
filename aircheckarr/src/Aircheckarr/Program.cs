@@ -59,7 +59,7 @@ app.MapGet("/api/status", (Database db, RecordingCoordinator co, LidarrClient li
             gemessen = stations.Count(s => s.MeasuredAt is not null),
             tauglich = stations.Count(s => s.PassesQuality(settings)),
             ausgewaehlt = stations.Count(s => s.Enabled),
-            bereit = stations.Count(s => s.Enabled && s.PassesQuality(settings)),
+            bereit = stations.Count(s => s.Enabled && s.PassesQuality(settings) && !s.IsSilent),
             aktiv = co.Running.Count,
         },
         wuensche = new
@@ -166,6 +166,10 @@ app.MapGet("/api/stations", (Database db, RecordingCoordinator co) =>
         s.Enabled,
         tauglich = s.PassesQuality(settings),
         laeuft = running.ContainsKey(s.Id),
+        treffer = s.Matches,
+        titel = s.TitlesSeen,
+        stumm = s.IsSilent,
+        verzug = s.IcyDelay,
     }));
 });
 

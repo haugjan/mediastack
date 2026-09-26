@@ -11,46 +11,84 @@ namespace Aircheckarr.Services;
 /// Entscheidend ist, dass NICHT neu kodiert wird. Ein Radiostream ist schon
 /// verlustbehaftet; ihn zum Schneiden noch einmal durch einen Kodierer zu
 /// schicken, kostet ein zweites Mal Qualitaet. Stattdessen sucht ein erster
-/// Durchlauf die Stille an den Raendern, der zweite schneidet mit
-/// "-c copy" genau dort. Das ist verlustfrei und nebenbei schnell.
+/// Durchlauf die Schnittstellen, der zweite schneidet mit "-c copy" genau
+/// dort. Das ist verlustfrei und nebenbei schnell.
+///
+/// Die Falle beim Suchen: Formatradio blendet ueber. Zwischen zwei Titeln
+/// gibt es keine Stille, eine Stillesuche findet dort nie etwas. Deshalb
+/// steht die Laenge des Titels fest, bevor gesucht wird (aus Lidarr, sonst
+/// der Abstand der beiden Titelmeldungen, die ja gleich stark verspaetet
+/// sind). Offen ist dann nur noch, um wie viel die Meldungen zu spaet kamen,
+/// und gesucht wird die Verschiebung, bei der BEIDE Enden auf einer leisen
+/// Stelle liegen. Eine Senke an beiden Enden im richtigen Abstand ist ein
+/// starkes Zeichen, eine einzelne leise Stelle im Lied nicht.
 /// </summary>
 public sealed partial class PostProcessor(Settings settings, ILogger<PostProcessor> log)
 {
-    [GeneratedRegex(@"silence_end:\s*([0-9.]+)")]
-    private static partial Regex SilenceEnd();
-
-    [GeneratedRegex(@"silence_start:\s*([0-9.]+)")]
-    private static partial Regex SilenceStart();
-
     [GeneratedRegex(@"[^\w\s.\-()&,']")]
     private static partial Regex UnsafeFileChars();
 
-    public sealed record Result(bool Ok, string? Path, double Seconds, string? Reason);
+    /// <summary>Wo im Rohmitschnitt die Titelmeldungen kamen, und was bekannt ist.</summary>
+    public sealed record CutHints(long StartMarkBytes, long EndMarkBytes, long TotalBytes,
+                                  double? ExpectedSeconds, double? DelayPrior);
+
+    /// <param name="Delay">Um wie viel die Meldung dem Ton hinterherhinkte.</param>
+    public sealed record Result(bool Ok, string? Path, double Seconds, string? Reason,
+                                double? Delay = null);
+
+    // Lautstaerke in Schritten von 100 ms. Feiner bringt nichts, ein
+    // MP3-Rahmen ist ohnehin 26 ms lang, und so bleibt die Suche billig.
+    private const double Step = 0.1;
+    private const int SampleRate = 8000;
+
+    // Ohne gelernten Wert: die meisten Sender liegen bei ein paar Sekunden.
+    private const double DefaultDelay = 4;
+    // Frueher als 3 s vor der Meldung beginnt kein Titel, spaeter als 25 s
+    // meldet kein Sender, den wir kennen.
+    private const double MinDelay = -3, MaxDelay = 25;
+    // Weicht die Laenge laut Meldungen um mehr ab, ist die Lidarr-Laenge eine
+    // andere Fassung (Album statt Radio-Edit) und taugt nicht als Anker.
+    private const double LengthTolerance = 15;
+    // Wie stark der gelernte Wert zieht, in dB je Sekunde Abweichung. Er
+    // entscheidet, wenn der Ton keine klare Senke hergibt. Mit 0,4 setzte
+    // sich im Praxistest ein leiser Zwischenteil eines Dance-Titels gegen
+    // den richtigen Uebergang durch und verschob den Schnitt um 8 s.
+    private const double PriorWeight = 1.0;
 
     /// <param name="handoverDir">
     /// Gesetzt, wenn Lidarr die Datei uebernimmt: dann landet sie dort statt
     /// in der Bibliothek, und Lidarr sortiert sie selbst ein.
     /// </param>
     public async Task<Result> FinalizeAsync(string tempPath, string artist, string title,
-                                            string? album, string? handoverDir,
+                                            string? album, string? handoverDir, CutHints hints,
                                             CancellationToken ct)
     {
-        var duration = await GetDurationAsync(tempPath, ct);
-        if (duration <= 0)
+        // Die Laenge kommt aus dem dekodierten Ton, nicht aus ffprobe: bei
+        // rohem MP3 und AAC schaetzt ffprobe sie nur aus der Bitrate.
+        var loudness = await LoudnessAsync(tempPath, ct);
+        if (loudness.Length == 0)
             return new Result(false, null, 0, "Datei liess sich nicht lesen");
+        var duration = loudness.Length * Step;
 
-        if (duration < settings.MinTrackSeconds)
-            return new Result(false, null, duration,
-                $"zu kurz ({duration:F0}s), vermutlich Jingle oder Werbung");
+        var total = Math.Max(1, hints.TotalBytes);
+        var startMark = duration * hints.StartMarkBytes / total;
+        var endMark = duration * hints.EndMarkBytes / total;
+        var announced = endMark - startMark;
 
-        if (duration > settings.MaxTrackSeconds)
-            return new Result(false, null, duration,
-                $"zu lang ({duration:F0}s), vermutlich eine Sendung statt eines Titels");
+        if (announced < settings.MinTrackSeconds)
+            return new Result(false, null, announced,
+                $"zu kurz ({announced:F0}s), vermutlich Jingle oder Werbung");
+        if (announced > settings.MaxTrackSeconds)
+            return new Result(false, null, announced,
+                $"zu lang ({announced:F0}s), vermutlich eine Sendung statt eines Titels");
 
-        var (start, end) = await DetectTrimAsync(tempPath, duration, ct);
+        var (start, end, delay, anchor) = FindCut(loudness, duration, startMark, announced, hints);
         var trimmed = end - start;
         if (trimmed < settings.MinTrackSeconds)
             return new Result(false, null, trimmed, "nach dem Beschneiden zu kurz");
+        log.LogInformation(
+            "Schnitt {Interpret} - {Titel}: {Start:F1}s bis {Ende:F1}s, Meldung {Verzug:F1}s zu spaet, Laenge aus {Anker}",
+            artist, title, start, end, delay, anchor);
 
         // Der Zielcontainer haengt am Codec, und daran haengen die Tags:
         // rohes AAC (ADTS) hat gar keinen Platz fuer Interpret und Titel,
@@ -91,50 +129,123 @@ public sealed partial class PostProcessor(Settings settings, ILogger<PostProcess
         }
 
         log.LogInformation("Abgelegt: {Pfad} ({Sekunden:F0}s)", target, trimmed);
-        return new Result(true, target, trimmed, null);
+        return new Result(true, target, trimmed, null, delay);
     }
 
     /// <summary>
-    /// Sucht Stille am Anfang und am Ende. Ueberblendet ein Sender hart,
-    /// gibt es keine, dann bleibt der Schnitt eben an den Rohgrenzen.
+    /// Sucht die Verschiebung der Titelmeldung gegen den Ton. Bewertet wird
+    /// jede Verschiebung danach, wie leise es an beiden Enden ist, plus ein
+    /// Aufschlag fuer den Abstand zum bisher gelernten Wert des Senders.
     /// </summary>
-    private async Task<(double Start, double End)> DetectTrimAsync(
-        string path, double duration, CancellationToken ct)
+    private static (double Start, double End, double Delay, string Anchor) FindCut(
+        double[] loudness, double duration, double startMark, double announced, CutHints hints)
     {
-        var (_, stderr) = await RunAsync("ffmpeg",
-            ["-hide_banner", "-nostats", "-i", path,
-             "-af", "silencedetect=noise=-45dB:d=0.35", "-f", "null", "-"],
-            TimeSpan.FromMinutes(2), ct);
+        var length = announced;
+        var anchor = "den Titelmeldungen";
+        if (hints.ExpectedSeconds is { } expected
+            && Math.Abs(expected - announced) <= LengthTolerance)
+        {
+            length = expected;
+            anchor = "Lidarr";
+        }
 
-        var start = 0.0;
-        var end = duration;
+        var prior = hints.DelayPrior ?? DefaultDelay;
+        double? best = null;
+        var bestScore = double.MaxValue;
+        for (var d = MinDelay; d <= MaxDelay; d += Step)
+        {
+            var s = startMark - d;
+            var e = s + length;
+            if (s < 0 || e > duration) continue;
+            var score = Dip(loudness, s) + Dip(loudness, e) + PriorWeight * Math.Abs(d - prior);
+            if (score >= bestScore) continue;
+            bestScore = score;
+            best = d;
+        }
 
-        // Nur Stille, die WIRKLICH am Rand liegt, darf weg. Eine Pause
-        // mitten im Lied bleibt selbstverstaendlich drin.
-        var firstEnd = SilenceEnd().Match(stderr);
-        if (firstEnd.Success
-            && double.TryParse(firstEnd.Groups[1].Value, NumberStyles.Float,
-                               CultureInfo.InvariantCulture, out var se)
-            && se is > 0 and < 4)
-            start = se;
-
-        foreach (Match m in SilenceStart().Matches(stderr))
-            if (double.TryParse(m.Groups[1].Value, NumberStyles.Float,
-                                CultureInfo.InvariantCulture, out var ss)
-                && ss > duration - 4 && ss > start)
-                end = ss;
-
-        return (start, Math.Max(end, start));
+        // Passt gar keine Verschiebung in die Datei (Sender hat frueh
+        // aufgelegt), bleibt der gelernte Wert, gekappt an den Dateigrenzen.
+        var delay = best ?? prior;
+        var start = Math.Clamp(startMark - delay, 0, duration);
+        var end = Math.Clamp(start + length, start, duration);
+        return (start, end, delay, anchor);
     }
 
-    private async Task<double> GetDurationAsync(string path, CancellationToken ct)
+    /// <summary>
+    /// Wie tief die leiseste Stelle in der Sekunde um den Zeitpunkt unter
+    /// dem Pegel der zehn Sekunden drumherum liegt, in dB (negativ = Senke).
+    /// Relativ statt absolut: sonst gewinnt in einem ruhigen Lied jede leise
+    /// Strophe gegen den Uebergang, der dort nur ein paar dB tiefer liegt.
+    /// </summary>
+    private static double Dip(double[] loudness, double at)
     {
-        var (code, output) = await RunAsync("ffprobe",
-            ["-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            TimeSpan.FromSeconds(30), ct, captureStdout: true);
-        return code == 0 && double.TryParse(output.Trim(), NumberStyles.Float,
-                                            CultureInfo.InvariantCulture, out var d) ? d : 0;
+        var from = Math.Max(0, (int)((at - 0.5) / Step));
+        var to = Math.Min(loudness.Length - 1, (int)((at + 0.5) / Step));
+        var min = 0.0;
+        for (var i = from; i <= to; i++) min = Math.Min(min, loudness[i]);
+
+        var wFrom = Math.Max(0, (int)((at - 5) / Step));
+        var wTo = Math.Min(loudness.Length - 1, (int)((at + 5) / Step));
+        var around = loudness[wFrom..(wTo + 1)];
+        Array.Sort(around);
+        var median = around.Length > 0 ? around[around.Length / 2] : 0;
+        return min - median;
+    }
+
+    /// <summary>
+    /// Lautstaerke des Mitschnitts in dB je 100 ms. Dekodiert wird nur zum
+    /// Messen, einkanalig mit 8 kHz: fuer Lautstaerke reicht das, und fuer
+    /// fuenf Minuten sind es knapp fuenf Megabyte.
+    /// </summary>
+    private static async Task<double[]> LoudnessAsync(string path, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("ffmpeg")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var a in (string[])["-v", "error", "-i", path, "-ac", "1",
+                                     "-ar", SampleRate.ToString(CultureInfo.InvariantCulture),
+                                     "-f", "s16le", "-"])
+            psi.ArgumentList.Add(a);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("ffmpeg liess sich nicht starten");
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromMinutes(2));
+
+        var pcm = new MemoryStream();
+        var stderr = proc.StandardError.ReadToEndAsync(cts.Token);
+        try
+        {
+            await proc.StandardOutput.BaseStream.CopyToAsync(pcm, cts.Token);
+            await proc.WaitForExitAsync(cts.Token);
+            await stderr;
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(true); } catch { /* war schon fort */ }
+            return [];
+        }
+
+        var samples = pcm.GetBuffer().AsSpan(0, (int)pcm.Length);
+        var perStep = (int)(SampleRate * Step);
+        var steps = samples.Length / 2 / perStep;
+        var result = new double[steps];
+        for (var i = 0; i < steps; i++)
+        {
+            double sum = 0;
+            for (var k = 0; k < perStep; k++)
+            {
+                var off = (i * perStep + k) * 2;
+                double v = (short)(samples[off] | (samples[off + 1] << 8));
+                sum += v * v;
+            }
+            var rms = Math.Sqrt(sum / perStep) / 32768.0;
+            result[i] = rms > 0 ? Math.Max(-90, 20 * Math.Log10(rms)) : -90;
+        }
+        return result;
     }
 
     private static string Clean(string s)

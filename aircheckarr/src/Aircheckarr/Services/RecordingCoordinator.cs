@@ -34,8 +34,22 @@ public sealed class RecordingCoordinator(
         public string? Artist { get; set; }
         public string? Title { get; set; }
         public DateTime? TitleSince { get; set; }
-        public bool Recording { get; set; }
+
+        /// <summary>Verschiedene Titel seit dem Verbinden.</summary>
+        public int Titles;
+
+        /// <summary>
+        /// Laufende Aufnahmen. Ein Zaehler statt Ja/Nein, weil sich mit dem
+        /// Nachlauf zwei Aufnahmen ueberlappen koennen.
+        /// </summary>
+        public int Takes;
+        public bool Recording => Volatile.Read(ref Takes) > 0;
     }
+
+    // Wer nach so langer Zeit keine zwei verschiedenen Titel gemeldet hat,
+    // sendet nur seinen Namen oder gar nichts. Eine Stunde, weil manche
+    // Sender zwischendurch lange Wortstrecken haben.
+    private static readonly TimeSpan SilentAfter = TimeSpan.FromHours(1);
 
     private volatile List<Wish> _openWishes = [];
     private readonly ConcurrentDictionary<string, Listening> _running = new();
@@ -199,7 +213,7 @@ public sealed class RecordingCoordinator(
             bestScore = score;
             best = w.Id;
         }
-        state.Recording = best is not null;
+        if (best is not null) Interlocked.Increment(ref state.Takes);
         return best;
     }
 
@@ -216,17 +230,36 @@ public sealed class RecordingCoordinator(
                 continue;
             }
 
-            var selected = db.GetStations(onlyEnabled: true, limit: 2000)
-                .Where(s => s.PassesQuality(settings))
+            // Stumme Sender aussortieren: eine Stunde verbunden, und kein
+            // einziger brauchbarer Titelwechsel. Sie belegten sonst einen
+            // Platz, auf dem nie ein Wunsch erkannt werden kann.
+            foreach (var l in _running.Values.ToList())
+            {
+                if (DateTime.UtcNow - l.Since < SilentAfter || l.Titles >= 2) continue;
+                log.LogInformation("{Sender} meldet keine Titel, wird fuer eine Woche aussortiert",
+                    l.Station.Name);
+                await db.MarkStationSilentAsync(l.Station.Id);
+                l.Stop.Cancel();
+            }
+
+            var ranked = db.GetStations(onlyEnabled: true, limit: 2000)
+                .Where(s => s.PassesQuality(settings) && !s.IsSilent)
+                .OrderBy(Rank)
+                .ThenByDescending(s => s.Matches)
+                .ThenByDescending(s => s.MeasuredBitrate)
                 .ToList();
+            var wanted = ranked.Take(settings.MaxConcurrentStations).Select(s => s.Id).ToHashSet();
 
-            // Abgewaehlte Sender trennen. Die Oberflaeche tut das auch schon
-            // selbst, hier faengt es ab, was an ihr vorbei geaendert wurde.
-            var selectedIds = selected.Select(s => s.Id).ToHashSet();
-            StopListening(_running.Keys.Where(id => !selectedIds.Contains(id)).ToList());
+            // Wer nicht (mehr) unter die ersten gehoert, macht Platz: abgewaehlt,
+            // aussortiert, oder von einem geeigneteren verdraengt. Eine
+            // laufende Aufnahme wird dabei nicht abgebrochen, der Sender geht
+            // erst in einer spaeteren Runde.
+            StopListening(_running.Values
+                .Where(l => !wanted.Contains(l.Station.Id) && !l.Recording)
+                .Select(l => l.Station.Id).ToList());
 
-            var candidates = selected
-                .Where(s => !_running.ContainsKey(s.Id))
+            var candidates = ranked
+                .Where(s => wanted.Contains(s.Id) && !_running.ContainsKey(s.Id))
                 .Take(Math.Max(0, settings.MaxConcurrentStations - _running.Count))
                 .ToList();
 
@@ -241,13 +274,26 @@ public sealed class RecordingCoordinator(
         }
     }
 
+    /// <summary>
+    /// Wer zuerst einen Platz bekommt. Sender mit Treffern vorn, denn dort
+    /// laufen die Wuensche erfahrungsgemaess. Danach die ungeprueften, damit
+    /// jeder ausgewaehlte Sender einmal zeigen kann, ob er Titel meldet.
+    /// Zuletzt die gepruefte, aber bisher erfolglose Reserve.
+    ///
+    /// Als geprueft gilt ein Sender ab fuenf Titeln. Einer, der nur seinen
+    /// Namen meldet, kommt nie so weit, behaelt seinen Platz bis zur
+    /// Stundenpruefung und wird dort aussortiert.
+    /// </summary>
+    private static int Rank(Station s) =>
+        s.Matches > 0 ? 0 : s.TitlesSeen < 5 ? 1 : 2;
+
     private async Task ListenToStationAsync(Listening state, CancellationToken ct)
     {
         var station = state.Station;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, state.Stop.Token);
         try
         {
-            await listener.ListenAsync(
+            var hasTitles = await listener.ListenAsync(
                 station, settings.WorkPath, station.MeasuredBitrate,
                 (artist, title) => MatchWish(state, artist, title),
                 // Nachbearbeitung und Uebergabe an Lidarr laufen abseits:
@@ -274,9 +320,11 @@ public sealed class RecordingCoordinator(
                     state.Artist = artist;
                     state.Title = title;
                     state.TitleSince = DateTime.UtcNow;
-                    state.Recording = false;
+                    state.Titles++;
+                    _ = db.AddStationTitlesAsync(station.Id, 1);
                 },
                 linked.Token);
+            if (!hasTitles) await db.MarkStationSilentAsync(station.Id);
         }
         catch (OperationCanceledException) { /* Abschalten oder abgewaehlt, kein Fehler */ }
         catch (Exception ex)
@@ -296,7 +344,7 @@ public sealed class RecordingCoordinator(
                                           long wishId, CancellationToken ct)
     {
         var station = state.Station;
-        state.Recording = false;
+        Interlocked.Decrement(ref state.Takes);
 
         // Frisch aus der Datenbank, nicht aus der Kopie im Speicher: der
         // Wunsch kann waehrend der Aufnahme erledigt worden sein, weil Lidarr
@@ -317,9 +365,17 @@ public sealed class RecordingCoordinator(
             ? Path.Combine(settings.WorkPath, "lidarr", Guid.NewGuid().ToString("N"))
             : null;
 
+        var hints = new PostProcessor.CutHints(segment.StartMarkBytes, segment.EndMarkBytes,
+                                               segment.TotalBytes, wish.ExpectedSeconds,
+                                               station.IcyDelay);
         var result = await post.FinalizeAsync(segment.TempPath, segment.Artist,
-                                              segment.Title, wish.Album, handover, ct);
+                                              segment.Title, wish.Album, handover, hints, ct);
         if (File.Exists(segment.TempPath)) File.Delete(segment.TempPath);
+
+        // Nur aus gelungenen Schnitten lernen: ein verworfener Jingle sagt
+        // ueber den Verzug des Senders nichts.
+        if (result.Ok && result.Delay is { } delay)
+            await db.LearnIcyDelayAsync(station.Id, delay);
 
         if (!result.Ok)
         {

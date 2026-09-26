@@ -16,20 +16,32 @@ Bibliothek.
 
 Aircheckarr macht drei Dinge anders:
 
-**Geschnitten wird an den ICY-Metadaten.** Shoutcast- und Icecast-Sender
-melden den laufenden Titel im Datenstrom selbst. Dieser Wechsel ist die
-genaue Schnittmarke, kein geschätzter Zeitpunkt.
+**Die ICY-Metadaten sind der Anker.** Shoutcast- und Icecast-Sender
+melden den laufenden Titel im Datenstrom selbst. Die Meldung kommt aber je
+nach Sender bis zu zwanzig Sekunden zu spät (Encoder-Puffer, Automation
+meldet erst beim Einblenden). Deshalb wird großzügig aufgenommen: 45
+Sekunden Vorlauf vor der Meldung, 20 Sekunden Nachlauf nach der nächsten.
 
-**Ein Vorlauf-Puffer fängt die Verzögerung ab.** Die Titelmeldung kommt oft
-ein paar Sekunden zu spät, der Titel läuft dann schon. Deshalb laufen immer
-die letzten sechs Sekunden Ton mit und werden beim Aufnahmestart
-vorangestellt.
+**Geschnitten wird an der Länge, nicht an der Stille.** Formatradio blendet
+über, zwischen zwei Titeln gibt es keine Stille. Also steht die Länge des
+Titels vorher fest: aus Lidarr (MusicBrainz), oder aus dem Abstand der
+beiden Titelmeldungen, die ja gleich stark verspätet sind. Offen ist dann
+nur noch, um wie viel die Meldungen zu spät kamen. Gesucht wird die
+Verschiebung, bei der **beide** Enden auf einer Senke liegen, gemessen
+gegen die zehn Sekunden drumherum. Eine Senke an beiden Enden im richtigen
+Abstand ist ein starkes Zeichen, eine leise Strophe mitten im Lied nicht.
+
+**Die Verzögerung wird je Sender gelernt.** Sie ist bei einem Sender
+ziemlich fest. Jeder gelungene Schnitt schärft den Wert, und er entscheidet,
+wenn der Ton keine klare Senke hergibt. Weicht die Lidarr-Länge um mehr als
+15 Sekunden von den Meldungen ab, spielt der Sender eine andere Fassung
+(Radio-Edit), und die Meldungen gelten.
 
 **Der erste Titel nach dem Verbinden wird übersprungen.** Er läuft bereits,
 ein Mitschnitt wäre ein Bruchstück ab der Mitte.
 
-Dazu kommen Längenfilter (kürzer als 70 Sekunden ist ein Jingle, länger als
-15 Minuten eine Sendung) und ein Schnitt an der Stille an beiden Rändern.
+Dazu kommen Längenfilter: kürzer als 70 Sekunden ist ein Jingle, länger als
+15 Minuten eine Sendung.
 
 ## Qualität
 
@@ -38,8 +50,8 @@ stehen 64000 kbit/s und Videostreams. Aircheckarr misst deshalb jeden Sender
 mit `ffprobe` nach und verwendet nur die gemessenen Werte. Was unter der
 eingestellten Grenze liegt, wird gar nicht erst mitgehört.
 
-Geschnitten wird **verlustfrei**: ein erster Durchlauf sucht die Stille, der
-zweite schneidet mit `-c copy` genau dort. Ein Radiostream ist schon
+Geschnitten wird **verlustfrei**: ein erster Durchlauf sucht die
+Schnittstellen, der zweite schneidet mit `-c copy` genau dort. Ein Radiostream ist schon
 verlustbehaftet, ihn zum Schneiden erneut zu kodieren kostete ein zweites Mal
 Qualität.
 
@@ -92,10 +104,20 @@ schaltest sie gemeinsam an, aus oder entfernst sie. Abgewählte Sender
 werden sofort getrennt.
 
 Mitgehört wird, was ausgewählt ist **und** die Messung besteht. Sind mehr
-Sender bereit als `AIRCHECKARR_MAX_STATIONS`, haben die mit der höchsten
-gemessenen Bitrate Vorrang. Nur beim allerersten Start wählt Aircheckarr
-selbst die 400 beliebtesten Sender vor, damit ohne einen Klick etwas
-passiert.
+Sender bereit als `AIRCHECKARR_MAX_STATIONS`, gehen die Plätze nach Eignung:
+zuerst Sender mit Treffern, denn dort laufen die Wünsche erfahrungsgemäß,
+dann noch ungeprüfte, damit jeder einmal zeigen kann, was er meldet, zuletzt
+der Rest nach Bitrate. Ein geeigneterer Sender verdrängt einen schwächeren,
+aber nie mitten in einer Aufnahme.
+
+Sender, die nach einer Stunde keine zwei verschiedenen Titel gemeldet haben,
+senden nur ihren Namen oder gar nichts. Sie werden für eine Woche
+aussortiert („Sendet keine Titel") und machen den Platz frei. Mithören aus
+und wieder an gibt ihnen sofort eine neue Chance.
+
+Neu ausgewählte Sender werden vor allen anderen gemessen. Nur beim
+allerersten Start wählt Aircheckarr selbst die 400 beliebtesten Sender vor,
+damit ohne einen Klick etwas passiert.
 
 ## Einstellungen
 

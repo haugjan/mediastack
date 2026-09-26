@@ -92,6 +92,10 @@ public sealed class Database(Settings settings, ILogger<Database> log)
         AddColumnIfMissing(c, "wish", "lidarr_release_id", "INTEGER");
         AddColumnIfMissing(c, "wish", "lidarr_track_id", "INTEGER");
         AddColumnIfMissing(c, "capture", "imported_by_lidarr", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(c, "wish", "expected_seconds", "REAL");
+        AddColumnIfMissing(c, "station", "icy_delay", "REAL");
+        AddColumnIfMissing(c, "station", "titles_seen", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(c, "station", "silent_since", "TEXT");
 
         log.LogInformation("Datenbank bereit: {Pfad}", settings.DatabasePath);
     }
@@ -183,16 +187,58 @@ public sealed class Database(Settings settings, ILogger<Database> log)
         {
             using var tx = c.BeginTransaction();
             using var cmd = c.CreateCommand();
-            cmd.CommandText = "UPDATE station SET enabled = $e WHERE id = $id;";
+            // Wer einen stummen Sender von Hand wieder einschaltet, will ihm
+            // eine neue Chance geben.
+            cmd.CommandText = enabled
+                ? "UPDATE station SET enabled = 1, silent_since = NULL WHERE id = $id;"
+                : "UPDATE station SET enabled = 0 WHERE id = $id;";
             foreach (var id in ids)
             {
                 cmd.Parameters.Clear();
-                cmd.Parameters.AddWithValue("$e", enabled ? 1 : 0);
                 cmd.Parameters.AddWithValue("$id", id);
                 cmd.ExecuteNonQuery();
             }
             tx.Commit();
             return 0;
+        });
+
+    public async Task AddStationTitlesAsync(string id, int count) =>
+        await WriteAsync(c =>
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "UPDATE station SET titles_seen = titles_seen + $n WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$n", count);
+            cmd.Parameters.AddWithValue("$id", id);
+            return cmd.ExecuteNonQuery();
+        });
+
+    public async Task MarkStationSilentAsync(string id) =>
+        await WriteAsync(c =>
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "UPDATE station SET silent_since = $at WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$at", DateTime.UtcNow.ToString("o"));
+            cmd.Parameters.AddWithValue("$id", id);
+            return cmd.ExecuteNonQuery();
+        });
+
+    /// <summary>
+    /// Verzoegerung nachfuehren. Gleitender Mittelwert statt letztem Wert:
+    /// ein einzelner Schnitt an der falschen Stelle soll den Sender nicht
+    /// dauerhaft verstellen.
+    /// </summary>
+    public async Task LearnIcyDelayAsync(string id, double delay) =>
+        await WriteAsync(c =>
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = """
+                UPDATE station SET icy_delay =
+                    CASE WHEN icy_delay IS NULL THEN $d ELSE icy_delay * 0.7 + $d * 0.3 END
+                 WHERE id = $id;
+                """;
+            cmd.Parameters.AddWithValue("$d", delay);
+            cmd.Parameters.AddWithValue("$id", id);
+            return cmd.ExecuteNonQuery();
         });
 
     /// <summary>
@@ -220,10 +266,17 @@ public sealed class Database(Settings settings, ILogger<Database> log)
     {
         using var c = Open();
         using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT * FROM station WHERE 1=1"
+        cmd.CommandText = """
+            SELECT station.*,
+                   (SELECT COUNT(*) FROM capture
+                     WHERE capture.station_id = station.id AND capture.state = 'done') AS matches
+              FROM station WHERE 1=1
+            """
             + (onlyEnabled ? " AND enabled = 1" : "")
             + (onlyUnmeasured ? " AND measured_at IS NULL" : "")
-            + " ORDER BY measured_bitrate DESC, catalog_bitrate DESC LIMIT $limit;";
+            // Ausgewaehlte zuerst: sonst wartet ein frisch angekreuzter Sender
+            // bei der Messung hinter Hunderten, die niemand hoeren will.
+            + " ORDER BY enabled DESC, measured_bitrate DESC, catalog_bitrate DESC LIMIT $limit;";
         cmd.Parameters.AddWithValue("$limit", limit);
         using var r = cmd.ExecuteReader();
         var list = new List<Station>();
@@ -245,6 +298,10 @@ public sealed class Database(Settings settings, ILogger<Database> log)
         MeasuredAt = r["measured_at"] is string s ? DateTime.Parse(s).ToUniversalTime() : null,
         MeasureError = r["measure_error"] as string,
         Enabled = Convert.ToInt32(r["enabled"]) == 1,
+        IcyDelay = r["icy_delay"] is DBNull or null ? null : Convert.ToDouble(r["icy_delay"]),
+        TitlesSeen = Convert.ToInt32(r["titles_seen"]),
+        SilentSince = r["silent_since"] is string ss ? DateTime.Parse(ss).ToUniversalTime() : null,
+        Matches = Convert.ToInt32(r["matches"]),
     };
 
     // -------------------------------------------------------------- Wuensche
@@ -257,8 +314,9 @@ public sealed class Database(Settings settings, ILogger<Database> log)
             // aus Lidarr am ersten bereits bekannten Titel.
             cmd.CommandText = """
                 INSERT INTO wish (artist, title, album, source, created_at, norm_artist, norm_title,
-                                  lidarr_artist_id, lidarr_album_id, lidarr_release_id, lidarr_track_id)
-                VALUES ($a, $t, $al, $s, $c, $na, $nt, $lar, $lal, $lre, $ltr)
+                                  lidarr_artist_id, lidarr_album_id, lidarr_release_id, lidarr_track_id,
+                                  expected_seconds)
+                VALUES ($a, $t, $al, $s, $c, $na, $nt, $lar, $lal, $lre, $ltr, $exp)
                 ON CONFLICT(norm_artist, norm_title) DO NOTHING
                 RETURNING id;
                 """;
@@ -280,6 +338,7 @@ public sealed class Database(Settings settings, ILogger<Database> log)
         cmd.Parameters.AddWithValue("$lal", (object?)w.LidarrAlbumId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$lre", (object?)w.LidarrReleaseId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$ltr", (object?)w.LidarrTrackId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$exp", (object?)w.ExpectedSeconds ?? DBNull.Value);
     }
 
     /// <summary>
@@ -299,18 +358,21 @@ public sealed class Database(Settings settings, ILogger<Database> log)
             {
                 // Eine vorhandene Zuordnung bleibt stehen. Steht derselbe Titel
                 // auf Single und Album, wuerde er sonst bei jedem Abgleich
-                // zwischen beiden hin und her springen.
+                // zwischen beiden hin und her springen. Die Solllaenge wird
+                // dagegen immer nachgetragen, auch bei schon verknuepften
+                // Wuenschen, die aus der Zeit vor dieser Spalte stammen.
                 cmd.CommandText = """
                     INSERT INTO wish (artist, title, album, source, created_at, norm_artist, norm_title,
-                                      lidarr_artist_id, lidarr_album_id, lidarr_release_id, lidarr_track_id)
-                    VALUES ($a, $t, $al, 'lidarr', $c, $na, $nt, $lar, $lal, $lre, $ltr)
+                                      lidarr_artist_id, lidarr_album_id, lidarr_release_id, lidarr_track_id,
+                                      expected_seconds)
+                    VALUES ($a, $t, $al, 'lidarr', $c, $na, $nt, $lar, $lal, $lre, $ltr, $exp)
                     ON CONFLICT(norm_artist, norm_title) DO UPDATE SET
                         album = COALESCE(wish.album, excluded.album),
-                        lidarr_artist_id = excluded.lidarr_artist_id,
-                        lidarr_album_id = excluded.lidarr_album_id,
-                        lidarr_release_id = excluded.lidarr_release_id,
-                        lidarr_track_id = excluded.lidarr_track_id
-                    WHERE wish.lidarr_track_id IS NULL
+                        lidarr_artist_id = COALESCE(wish.lidarr_artist_id, excluded.lidarr_artist_id),
+                        lidarr_album_id = COALESCE(wish.lidarr_album_id, excluded.lidarr_album_id),
+                        lidarr_release_id = COALESCE(wish.lidarr_release_id, excluded.lidarr_release_id),
+                        lidarr_track_id = COALESCE(wish.lidarr_track_id, excluded.lidarr_track_id),
+                        expected_seconds = COALESCE(wish.expected_seconds, excluded.expected_seconds)
                     RETURNING (created_at = $c);
                     """;
                 var now = DateTime.UtcNow.ToString("o");
@@ -425,6 +487,8 @@ public sealed class Database(Settings settings, ILogger<Database> log)
         LidarrAlbumId = NullableInt(r, "lidarr_album_id"),
         LidarrReleaseId = NullableInt(r, "lidarr_release_id"),
         LidarrTrackId = NullableInt(r, "lidarr_track_id"),
+        ExpectedSeconds = r["expected_seconds"] is DBNull or null
+            ? null : Convert.ToDouble(r["expected_seconds"]),
     };
 
     // ------------------------------------------------------------ Mitschnitte

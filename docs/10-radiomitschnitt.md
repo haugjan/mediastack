@@ -78,6 +78,8 @@ der Kauf bei Bandcamp der bessere Weg, siehe [docs/08](08-musik.md).
 | Kein Sender „tauglich" | Filter zu streng, oder der Katalog enthält für diese Stilrichtung nur schwache Sender |
 | Sender tauglich, aber nichts passiert | kein offener Wunsch — ohne Wünsche wird nicht zugehört |
 | Mitschnitte werden als „zu kurz" verworfen | Sender meldet Jingles als Titel, das ist normal und richtig so |
+| Sender steht auf „Sendet keine Titel" | Er meldete eine Stunde lang nur seinen Namen oder nichts; nach einer Woche kommt er wieder dran, Mithören aus und an sofort |
+| Anfang oder Ende sitzt ein paar Sekunden daneben | Der Dienst lernt die Verzögerung je Sender, nach drei, vier Titeln sitzt es meist; der gelernte Wert steht beim Darüberfahren über der Spalte *Treffer* |
 | Alles wird verworfen als „zu lang" | Sender meldet Sendungsnamen statt Titeln, taugt nicht |
 | Titel läuft, wird aber nicht erkannt | Schreibweise weicht stark ab; `AIRCHECKARR_MATCH_THRESHOLD` senken, aber nicht unter 0.8 |
 | Keine Wünsche aus Lidarr | `LIDARR_API_KEY` fehlt in der `.env`, oder das Album wird in Lidarr nicht beobachtet; Stand unter *System* |

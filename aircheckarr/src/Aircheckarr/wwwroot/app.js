@@ -167,10 +167,13 @@ const SEITEN = {
       ["aktualisieren", "Aktualisieren", (knopf) => neuLaden(knopf)],
     ],
     filter: [["alle", "Alle"], ["mithoeren", "Mithören"], ["laeuft", "Läuft gerade"],
+             ["treffer", "Mit Treffern"], ["stumm", "Sendet keine Titel"],
              ["tauglich", "Tauglich"], ["untauglich", "Untauglich"], ["ungemessen", "Ungemessen"]],
     filtern: (s, f) =>
       f === "mithoeren" ? s.enabled
       : f === "laeuft" ? s.laeuft
+      : f === "treffer" ? s.treffer > 0
+      : f === "stumm" ? s.stumm
       : f === "tauglich" ? s.tauglich
       : f === "untauglich" ? !!s.gemessen && !s.tauglich
       : f === "ungemessen" ? !s.gemessen
@@ -191,6 +194,9 @@ const SEITEN = {
         zelle: (s) => s.gemessenBitrate ? `${s.gemessenBitrate} kbit/s` : "–" },
       { titel: "Codec", klasse: "schmal weg-klein", wert: (s) => s.gemessenCodec ?? "",
         zelle: (s) => esc(s.gemessenCodec ?? "–") },
+      { titel: "Treffer", klasse: "zahl schmal", wert: (s) => s.treffer,
+        zelle: (s) => `<span title="${s.titel} Titel gemeldet${s.verzug != null
+          ? `, Meldung kommt ${s.verzug.toFixed(1)} s zu spät` : ""}">${s.treffer || "–"}</span>` },
       { titel: "Zustand", klasse: "schmal", wert: (s) => senderRang(s), zelle: (s) => senderZustand(s) },
     ],
     aktionen: [
@@ -205,8 +211,9 @@ const SEITEN = {
                            "mehrere ankreuzen und übernehmen."]);
       } else if (s.sender.bereit > s.filter.maxSender) {
         h.push(["info", `${s.sender.bereit} ausgewählte Sender taugen, gleichzeitig gehört ` +
-                        `werden höchstens ${s.filter.maxSender}. Vorrang haben die mit der ` +
-                        `höchsten gemessenen Bitrate.`]);
+                        `werden höchstens ${s.filter.maxSender}. Die Plätze gehen zuerst an ` +
+                        `Sender mit Treffern, dann an noch ungeprüfte, dann nach Bitrate. ` +
+                        `Sender ohne Titelmeldungen fliegen nach einer Stunde von selbst raus.`]);
       }
       if (s.wuensche.offen === 0) {
         h.push(["info", "Keine offenen Wünsche. Solange wird gar nicht mitgehört, das spart Bandbreite."]);
@@ -290,6 +297,11 @@ function senderRang(s) {
 function senderZustand(s) {
   const f = zustand.status?.filter;
   if (s.laeuft) return etikett("Hört zu", "marke");
+  if (s.stumm) {
+    return etikett("Sendet keine Titel", "gefahr",
+      "Nach einer Stunde keine brauchbaren Titelmeldungen. Wird eine Woche übersprungen, " +
+      "Mithören aus und wieder an gibt sofort eine neue Chance.");
+  }
   if (!s.gemessen) return etikett("Wird gemessen", "", "Die Messung läuft im Hintergrund");
   if (s.fehler) return etikett("Nicht erreichbar", "gefahr", s.fehler);
   if (!s.tauglich) {
@@ -298,7 +310,10 @@ function senderZustand(s) {
     }
     return etikett(`Codec ${s.gemessenCodec ?? "?"}`, "warnung", "Codec ist nicht zugelassen");
   }
-  if (s.enabled) return etikett("Bereit", "erfolg", "Wird gehört, sobald ein Platz frei ist");
+  if (s.enabled) {
+    return etikett("Bereit", "erfolg",
+      "Wartet auf einen Platz. Vorrang haben Sender mit Treffern, dann ungeprüfte.");
+  }
   return etikett("Tauglich", "info");
 }
 

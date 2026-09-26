@@ -23,8 +23,32 @@ public sealed record Station
     public DateTime? MeasuredAt { get; init; }
     public string? MeasureError { get; init; }
 
-    /// <summary>Wird mitgehoert. Setzt die Qualitaetspruefung.</summary>
+    /// <summary>Zum Mithoeren ausgewaehlt, von Hand in der Oberflaeche.</summary>
     public bool Enabled { get; init; }
+
+    /// <summary>
+    /// Wie viele Sekunden die Titelmeldung dieses Senders dem Ton
+    /// hinterherhinkt, gelernt aus den bisherigen Schnitten. Encoder-Puffer
+    /// und Sendeautomation machen daraus je Sender einen festen Wert
+    /// zwischen null und zwanzig Sekunden.
+    /// </summary>
+    public double? IcyDelay { get; init; }
+
+    /// <summary>Wie viele verschiedene Titel der Sender bisher gemeldet hat.</summary>
+    public int TitlesSeen { get; init; }
+
+    /// <summary>
+    /// Seit wann der Sender als stumm gilt: er sendet keine Titelmeldungen
+    /// oder nur seinen eigenen Namen. Solche Sender belegten sonst einen
+    /// Platz, ohne je einen Wunsch erkennen zu koennen.
+    /// </summary>
+    public DateTime? SilentSince { get; init; }
+
+    /// <summary>Gelungene Mitschnitte von diesem Sender.</summary>
+    public int Matches { get; init; }
+
+    /// <summary>Nach einer Woche bekommt ein stummer Sender eine neue Chance.</summary>
+    public bool IsSilent => SilentSince is { } s && s > DateTime.UtcNow.AddDays(-7);
 
     public bool PassesQuality(Settings s) =>
         MeasuredAt is not null
@@ -57,6 +81,9 @@ public sealed record Wish
     public int? LidarrAlbumId { get; init; }
     public int? LidarrReleaseId { get; init; }
     public int? LidarrTrackId { get; init; }
+
+    /// <summary>Spieldauer laut Lidarr, der Anker fuer den Schnitt.</summary>
+    public double? ExpectedSeconds { get; init; }
 
     public bool InLidarr =>
         LidarrArtistId is not null && LidarrAlbumId is not null

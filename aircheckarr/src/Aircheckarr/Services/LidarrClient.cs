@@ -130,6 +130,8 @@ public sealed class LidarrClient(HttpClient http, Settings settings, ILogger<Lid
                 LidarrAlbumId = albumId,
                 LidarrReleaseId = releaseId,
                 LidarrTrackId = trackId,
+                // Lidarr liefert Millisekunden aus MusicBrainz.
+                ExpectedSeconds = Int(track, "duration") is > 0 and var ms ? ms / 1000.0 : null,
             });
         }
         return list;
