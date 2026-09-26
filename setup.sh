@@ -2253,6 +2253,18 @@ if [[ -n $PLEX_TOKEN_VAL ]]; then
 		http://localhost:32400/:/prefs >>"$LOG" 2>&1 \
 		&& ok "Plex: Umrechnen laeuft ueber den Arbeitsspeicher"
 
+	# Ab Werk schaut Plex nie von selbst nach neuen Dateien, und Sonarr,
+	# Radarr und Lidarr melden sich bei Plex nicht. Was sie importieren,
+	# bliebe unsichtbar, bis jemand von Hand scannt. Plex soll deshalb den
+	# Ordner beobachten und nur den geaenderten Teil scannen, und stuendlich
+	# alles, falls dabei ein Ereignis verloren geht.
+	curl -sS -o /dev/null --max-time 10 -X PUT -H "X-Plex-Token: $PLEX_TOKEN_VAL" \
+		--get --data-urlencode 'FSEventLibraryUpdatesEnabled=1' \
+		--data-urlencode 'FSEventLibraryPartialScanEnabled=1' \
+		--data-urlencode 'ScheduledLibraryUpdatesEnabled=1' \
+		http://localhost:32400/:/prefs >>"$LOG" 2>&1 \
+		&& ok "Plex: neue Dateien erscheinen von selbst"
+
 	# Bibliotheken anlegen, die es noch nicht gibt. Agent und Scanner
 	# muessen zusammenpassen, sonst antwortet Plex mit
 	# "new scanner needs to be paired with new agent".
