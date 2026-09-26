@@ -115,6 +115,32 @@ senden nur ihren Namen oder gar nichts. Sie werden für eine Woche
 aussortiert („Sendet keine Titel") und machen den Platz frei. Mithören aus
 und wieder an gibt ihnen sofort eine neue Chance.
 
+### Mithören und Beobachten
+
+Ausgewählte Sender arbeiten auf zwei Arten, zu sehen unter *Aktivität*:
+
+- **Hört mit:** Der Audiostrom ist offen, bis zu `AIRCHECKARR_MAX_STATIONS`
+  Sender gleichzeitig. Nur diese können aufnehmen. Jeder kostet rund um die
+  Uhr seine Bitrate, zwölf Sender also etwa 2,5 Mbit/s.
+- **Beobachtet:** Alle übrigen ausgewählten Sender, deren Server eine
+  Statusseite hat (Icecast, Shoutcast). Alle 15 Sekunden wird nur der
+  laufende Titel gelesen, ein paar Kilobyte. Aufnehmen geht so nicht: bis
+  der Titel dort erkannt ist, läuft er schon. Aber ein Wunsch auf einem
+  beobachteten Sender zählt als Treffer, und der Sender rückt bei der
+  Platzvergabe nach vorn. So findet sich mit der Zeit von selbst, wo die
+  Wünsche laufen.
+
+Große Sendernetze (Heart, Gold, FFH, alles über streamtheworld) haben keine
+erreichbare Statusseite und können nur mitgehört werden. Ob ein Server eine
+hat, wird einmal geprüft und nach einem Tag erneut, falls nicht.
+
+### Anhören
+
+Unter *Mitschnitte* und bei erfüllten *Wünschen* spielt ein Knopf den Titel
+direkt im Browser ab. Ausgeliefert wird nur, was als Mitschnitt verbucht ist
+und in der Musikbibliothek liegt. Hat Lidarr die Datei später umbenannt,
+findet der Knopf sie nicht mehr.
+
 Neu ausgewählte Sender werden vor allen anderen gemessen. Nur beim
 allerersten Start wählt Aircheckarr selbst die 400 beliebtesten Sender vor,
 damit ohne einen Klick etwas passiert.
@@ -134,6 +160,8 @@ Alles über Umgebungsvariablen, wie im übrigen Stack.
 | `AIRCHECKARR_MATCH_THRESHOLD` | `0.86` | ab welcher Ähnlichkeit ein Treffer gilt |
 | `AIRCHECKARR_MIN_SECONDS` | `70` | kürzer ist ein Jingle |
 | `AIRCHECKARR_MAX_SECONDS` | `900` | länger ist eine Sendung |
+| `AIRCHECKARR_WATCH` | `1` | übrige ausgewählte Sender über ihre Statusseite beobachten, `0` = aus |
+| `AIRCHECKARR_WATCH_SECONDS` | `15` | wie oft beobachtete Sender abgefragt werden |
 | `AIRCHECKARR_LIDARR_SYNC` | `15` | Abgleich mit Lidarr alle so viele Minuten, `0` = nur auf Knopfdruck |
 | `AIRCHECKARR_LIDARR_ALBUMS` | `250` | höchstens so viele fehlende Alben, die jüngsten zuerst |
 | `LIDARR_URL`, `LIDARR_API_KEY` | — | für Wunschliste und Import |

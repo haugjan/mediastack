@@ -257,6 +257,24 @@ body.mit-auswahl .seite { padding-bottom: 64px; }
 .auswahl .anzahl { font-weight: 500; }
 .auswahl .knoepfe { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
 
+/* ------------------------------------------------------ Abspielleiste */
+/* Unten wie in einem Musikspieler. Steht die Leiste fuer Markiertes auch
+   da, rueckt der Spieler darueber, statt sie zu verdecken. */
+.spieler {
+  position: fixed; left: 210px; right: 0; bottom: 0; z-index: 16;
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px 20px; background: var(--werkzeug-bg); color: var(--werkzeug-text);
+  border-top: 1px solid var(--linie); box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.12);
+}
+.spieler[hidden] { display: none; }
+.spieler-titel { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.spieler audio { flex: 1; height: 36px; min-width: 0; }
+body.mit-spieler .seite { padding-bottom: 64px; }
+body.mit-spieler.mit-auswahl .seite { padding-bottom: 128px; }
+body.mit-spieler .auswahl { bottom: 53px; }
+.klein-knopf { padding: 4px 8px; }
+.klein-knopf .sym { width: 13px; height: 13px; fill: currentColor; stroke: none; }
+
 /* -------------------------------------------------------------- Dialoge */
 .dialog-huelle {
   position: fixed; inset: 0; z-index: 50;
@@ -340,6 +358,8 @@ input[type=checkbox] { accent-color: var(--marke); }
   }
   .seite { margin-left: 0; }
   .auswahl { left: 0; }
+  .spieler { left: 0; flex-wrap: wrap; }
+  .spieler-titel { max-width: 100%; }
   .meldungen { left: 16px; right: 16px; }
   .inhalt { padding: 12px 16px; }
   .wz { min-width: 44px; padding: 4px 6px; }

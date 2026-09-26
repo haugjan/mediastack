@@ -39,7 +39,14 @@ Seiten, oben die Knöpfe, darunter die Tabelle.
    ein.
 3. **Warten.** Ohne offene Wünsche hört der Dienst gar nicht erst zu, das
    spart Bandbreite. Mit Wünschen hört er bis zu zwölf Sender gleichzeitig.
-   Was gerade läuft und was aufgenommen wird, zeigt *Aktivität*.
+   Was gerade läuft und was aufgenommen wird, zeigt *Aktivität*. Dort
+   steht auch, welche Sender nur **beobachtet** werden: Von ihnen liest der
+   Dienst nur die Titelanzeige, das kostet kaum Bandbreite. Aufnehmen können
+   sie nicht, aber läuft dort ein Wunsch, rückt der Sender nach vorn und
+   hört beim nächsten Mal mit. Wähle also ruhig mehr Sender aus als die
+   zwölf, die gleichzeitig mithören.
+4. **Anhören.** Unter *Mitschnitte* spielt der Knopf rechts den Titel direkt
+   im Browser ab.
 
 Ein Mitschnitt zu einem Lidarr-Wunsch geht an Lidarr zurück: Lidarr
 übernimmt die Datei, benennt sie wie alles andere und hakt den Titel ab.

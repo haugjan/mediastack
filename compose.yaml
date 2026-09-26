@@ -518,6 +518,7 @@ services:
       # finden. Ohne Schluessel laeuft es mit der eigenen Liste weiter.
       AIRCHECKARR_LIDARR_SYNC: ${AIRCHECKARR_LIDARR_SYNC:-15}
       AIRCHECKARR_LIDARR_ALBUMS: ${AIRCHECKARR_LIDARR_ALBUMS:-250}
+      AIRCHECKARR_WATCH: ${AIRCHECKARR_WATCH:-1}
       LIDARR_URL: http://lidarr:8686
       LIDARR_API_KEY: ${LIDARR_API_KEY}
     volumes:

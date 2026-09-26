@@ -96,6 +96,9 @@ public sealed class Database(Settings settings, ILogger<Database> log)
         AddColumnIfMissing(c, "station", "icy_delay", "REAL");
         AddColumnIfMissing(c, "station", "titles_seen", "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing(c, "station", "silent_since", "TEXT");
+        AddColumnIfMissing(c, "station", "status_kind", "TEXT");
+        AddColumnIfMissing(c, "station", "watch_hits", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(c, "station", "status_checked", "TEXT");
 
         log.LogInformation("Datenbank bereit: {Pfad}", settings.DatabasePath);
     }
@@ -212,6 +215,26 @@ public sealed class Database(Settings settings, ILogger<Database> log)
             return cmd.ExecuteNonQuery();
         });
 
+    public async Task SetStatusKindAsync(string id, string kind) =>
+        await WriteAsync(c =>
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "UPDATE station SET status_kind = $k, status_checked = $at WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$k", kind);
+            cmd.Parameters.AddWithValue("$at", DateTime.UtcNow.ToString("o"));
+            cmd.Parameters.AddWithValue("$id", id);
+            return cmd.ExecuteNonQuery();
+        });
+
+    public async Task AddWatchHitAsync(string id) =>
+        await WriteAsync(c =>
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "UPDATE station SET watch_hits = watch_hits + 1 WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$id", id);
+            return cmd.ExecuteNonQuery();
+        });
+
     public async Task MarkStationSilentAsync(string id) =>
         await WriteAsync(c =>
         {
@@ -302,6 +325,9 @@ public sealed class Database(Settings settings, ILogger<Database> log)
         TitlesSeen = Convert.ToInt32(r["titles_seen"]),
         SilentSince = r["silent_since"] is string ss ? DateTime.Parse(ss).ToUniversalTime() : null,
         Matches = Convert.ToInt32(r["matches"]),
+        StatusKind = r["status_kind"] as string,
+        WatchHits = Convert.ToInt32(r["watch_hits"]),
+        StatusCheckedAt = r["status_checked"] is string sc ? DateTime.Parse(sc).ToUniversalTime() : null,
     };
 
     // -------------------------------------------------------------- Wuensche
@@ -520,12 +546,20 @@ public sealed class Database(Settings settings, ILogger<Database> log)
             return Convert.ToInt64(cmd.ExecuteScalar());
         });
 
-    public List<Capture> GetCaptures(int limit = 100)
+    public Capture? GetCapture(long id) =>
+        GetCaptures(1, id).FirstOrDefault();
+
+    public List<Capture> GetCaptures(int limit = 100) => GetCaptures(limit, null);
+
+    private List<Capture> GetCaptures(int limit, long? onlyId)
     {
         using var c = Open();
         using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT * FROM capture ORDER BY started_at DESC LIMIT $l;";
+        cmd.CommandText = "SELECT * FROM capture"
+            + (onlyId is null ? "" : " WHERE id = $id")
+            + " ORDER BY started_at DESC LIMIT $l;";
         cmd.Parameters.AddWithValue("$l", limit);
+        if (onlyId is not null) cmd.Parameters.AddWithValue("$id", onlyId);
         using var r = cmd.ExecuteReader();
         var list = new List<Capture>();
         while (r.Read())

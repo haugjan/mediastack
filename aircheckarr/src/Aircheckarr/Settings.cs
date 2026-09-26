@@ -53,6 +53,16 @@ public sealed class Settings
     /// </summary>
     public int LidarrMaxAlbums { get; init; } = 250;
 
+    /// <summary>
+    /// Ausgewaehlte Sender ohne freien Platz ueber ihre Statusseite
+    /// beobachten. Kostet ein paar Kilobyte je Abfrage statt eines offenen
+    /// Stroms und zeigt, auf welchen Sendern Wuensche laufen.
+    /// </summary>
+    public bool WatchEnabled { get; init; } = true;
+
+    /// <summary>Wie oft beobachtete Sender abgefragt werden, in Sekunden.</summary>
+    public int WatchSeconds { get; init; } = 15;
+
     /// <summary>Katalogquelle. Ein Spiegel, falls de1 einmal ausfaellt.</summary>
     public string RadioBrowserUrl { get; init; } = "https://de1.api.radio-browser.info";
 
@@ -85,6 +95,8 @@ public sealed class Settings
             LidarrApiKey = Get("LIDARR_API_KEY"),
             LidarrSyncMinutes = Math.Max(0, GetInt("AIRCHECKARR_LIDARR_SYNC", 15)),
             LidarrMaxAlbums = Math.Max(1, GetInt("AIRCHECKARR_LIDARR_ALBUMS", 250)),
+            WatchEnabled = Get("AIRCHECKARR_WATCH") is not ("0" or "false" or "nein"),
+            WatchSeconds = Math.Max(5, GetInt("AIRCHECKARR_WATCH_SECONDS", 15)),
             RadioBrowserUrl = Get("AIRCHECKARR_RADIOBROWSER") ?? "https://de1.api.radio-browser.info",
         };
     }

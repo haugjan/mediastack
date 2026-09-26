@@ -18,7 +18,7 @@ namespace Aircheckarr.Services;
 /// </summary>
 public sealed class RecordingCoordinator(
     Database db, Settings settings, RadioBrowserClient catalog, QualityProbe probe,
-    IcyStreamListener listener, PostProcessor post, LidarrClient lidarr,
+    IcyStreamListener listener, PostProcessor post, LidarrClient lidarr, StatusPage statusPage,
     ILogger<RecordingCoordinator> log) : BackgroundService
 {
     /// <summary>
@@ -85,7 +85,8 @@ public sealed class RecordingCoordinator(
         var listening = Task.Run(() => ListenLoopAsync(ct), ct);
         var wishes = Task.Run(() => WishLoopAsync(ct), ct);
         var lidarrSync = Task.Run(() => LidarrLoopAsync(ct), ct);
-        await Task.WhenAll(measuring, listening, wishes, lidarrSync);
+        var watching = Task.Run(() => WatchLoopAsync(ct), ct);
+        await Task.WhenAll(measuring, listening, wishes, lidarrSync, watching);
     }
 
     public async Task<int> RefreshCatalogAsync(string? tag, string? country, int limit,
@@ -202,6 +203,13 @@ public sealed class RecordingCoordinator(
     /// </summary>
     private long? MatchWish(Listening state, string artist, string title)
     {
+        var best = FindWish(artist, title);
+        if (best is not null) Interlocked.Increment(ref state.Takes);
+        return best;
+    }
+
+    private long? FindWish(string artist, string title)
+    {
         var wishes = _openWishes;
         long? best = null;
         var bestScore = settings.MatchThreshold;
@@ -213,8 +221,96 @@ public sealed class RecordingCoordinator(
             bestScore = score;
             best = w.Id;
         }
-        if (best is not null) Interlocked.Increment(ref state.Takes);
         return best;
+    }
+
+    // ---------------------------------------------------------- Beobachten
+
+    /// <summary>Ein Sender, der nur ueber seine Statusseite beobachtet wird.</summary>
+    public sealed class Watched(Station station)
+    {
+        public Station Station { get; } = station;
+        public string? Artist { get; set; }
+        public string? Title { get; set; }
+        public DateTime? TitleSince { get; set; }
+        public DateTime? LastHit { get; set; }
+        public string? LastHitTitle { get; set; }
+    }
+
+    private readonly ConcurrentDictionary<string, Watched> _watched = new();
+
+    /// <summary>Was gerade nur beobachtet wird, fuer die Oberflaeche.</summary>
+    public IReadOnlyDictionary<string, Watched> Watching => _watched;
+
+    /// <summary>
+    /// Das erweiterte Abgrasen: alle ausgewaehlten Sender, die keinen Platz
+    /// zum Mithoeren haben, werden ueber ihre Statusseite beobachtet. Laeuft
+    /// dort ein Wunsch, ist er fuer diesmal verloren, denn der Anfang ist
+    /// vorbei. Aber der Sender bekommt einen Treffer und rueckt bei der
+    /// Platzvergabe nach vorn; beim naechsten Mal hoert er mit.
+    /// </summary>
+    private async Task WatchLoopAsync(CancellationToken ct)
+    {
+        if (!settings.WatchEnabled) return;
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(settings.WatchSeconds), ct);
+            if (_openWishes.Count == 0) { _watched.Clear(); continue; }
+
+            var candidates = db.GetStations(onlyEnabled: true, limit: 2000)
+                .Where(s => s.PassesQuality(settings) && !_running.ContainsKey(s.Id))
+                .ToList();
+
+            // Wer inzwischen mithoert oder abgewaehlt ist, wird nicht mehr beobachtet.
+            var ids = candidates.Where(s => s.CanBeWatched).Select(s => s.Id).ToHashSet();
+            foreach (var id in _watched.Keys.Where(id => !ids.Contains(id)).ToList())
+                _watched.TryRemove(id, out _);
+
+            // Unbekannte Sender auf eine Statusseite pruefen, hoechstens 24 je
+            // Runde und gleichzeitig: jeder Versuch wartet ueberwiegend aufs
+            // Netz. "Keine" wird nach einem Tag neu geprueft, Server ziehen um.
+            await Task.WhenAll(candidates.Where(DetectDue).Take(24).Select(async s =>
+            {
+                var kind = await statusPage.DetectAsync(s.Url, ct);
+                if (kind is null) return;   // Netz oder Zeit, naechste Runde
+                await db.SetStatusKindAsync(s.Id, kind);
+                if (kind != StatusPage.None)
+                    log.LogInformation("{Sender} laesst sich beobachten ({Art})", s.Name, kind);
+            }));
+
+            using var slots = new SemaphoreSlim(8);
+            await Task.WhenAll(candidates.Where(s => s.CanBeWatched).Select(async s =>
+            {
+                await slots.WaitAsync(ct);
+                try { await PollAsync(_watched.GetOrAdd(s.Id, _ => new Watched(s)), ct); }
+                finally { slots.Release(); }
+            }));
+        }
+    }
+
+    private static bool DetectDue(Station s) =>
+        s.StatusKind is null
+        || (s.StatusKind == StatusPage.None
+            && (s.StatusCheckedAt is not { } at || at < DateTime.UtcNow.AddDays(-1)));
+
+    private async Task PollAsync(Watched w, CancellationToken ct)
+    {
+        var raw = await statusPage.ReadTitleAsync(w.Station.Url, w.Station.StatusKind!, ct);
+        if (raw is null || TitleMatcher.SplitStreamTitle(raw) is not { } split) return;
+        var (artist, title) = split;
+        if (artist == w.Artist && title == w.Title) return;
+
+        w.Artist = artist;
+        w.Title = title;
+        w.TitleSince = DateTime.UtcNow;
+        await db.AddStationTitlesAsync(w.Station.Id, 1);
+
+        if (FindWish(artist, title) is null) return;
+        w.LastHit = DateTime.UtcNow;
+        w.LastHitTitle = $"{artist} - {title}";
+        await db.AddWatchHitAsync(w.Station.Id);
+        log.LogInformation("Wunsch laeuft auf beobachtetem Sender {Sender}: {Interpret} - {Titel}",
+            w.Station.Name, artist, title);
     }
 
     // --------------------------------------------------------------- Hoeren
@@ -245,7 +341,10 @@ public sealed class RecordingCoordinator(
             var ranked = db.GetStations(onlyEnabled: true, limit: 2000)
                 .Where(s => s.PassesQuality(settings) && !s.IsSilent)
                 .OrderBy(Rank)
-                .ThenByDescending(s => s.Matches)
+                // Ein Mitschnitt zaehlt doppelt: er beweist, dass sich dort
+                // auch sauber schneiden laesst, ein Beobachtungstreffer nur,
+                // dass der Titel dort laeuft.
+                .ThenByDescending(s => s.Matches * 2 + s.WatchHits)
                 .ThenByDescending(s => s.MeasuredBitrate)
                 .ToList();
             var wanted = ranked.Take(settings.MaxConcurrentStations).Select(s => s.Id).ToHashSet();
@@ -285,7 +384,7 @@ public sealed class RecordingCoordinator(
     /// Stundenpruefung und wird dort aussortiert.
     /// </summary>
     private static int Rank(Station s) =>
-        s.Matches > 0 ? 0 : s.TitlesSeen < 5 ? 1 : 2;
+        s.Matches > 0 || s.WatchHits > 0 ? 0 : s.TitlesSeen < 5 ? 1 : 2;
 
     private async Task ListenToStationAsync(Listening state, CancellationToken ct)
     {
@@ -357,6 +456,12 @@ public sealed class RecordingCoordinator(
                                    "Wunsch war inzwischen erledigt");
             return;
         }
+
+        // Ab hier gilt die Schreibweise des Wunsches, nicht die des Senders.
+        // Manche Sender melden "Titel (Jahr) - Interpret" (Radio 1). Erkannt
+        // wird das trotzdem, der Vergleich prueft beide Richtungen; getaggt
+        // und abgelegt wurde aber vertauscht, "ABBA" als Titel.
+        segment = segment with { Artist = wish.Artist, Title = wish.Title };
 
         // Mit Lidarr-Zuordnung geht die Datei in einen eigenen Ordner zur
         // Uebergabe. Allein darin, weil Lidarr den ganzen Ordner einliest.

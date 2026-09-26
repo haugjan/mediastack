@@ -22,6 +22,8 @@ builder.Services.AddSingleton<Database>();
 builder.Services.AddSingleton<QualityProbe>();
 builder.Services.AddSingleton<IcyStreamListener>();
 builder.Services.AddSingleton<PostProcessor>();
+builder.Services.AddHttpClient<StatusPage>(c =>
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("aircheckarr/1.0"));
 builder.Services.AddHttpClient<RadioBrowserClient>(c =>
 {
     // Die Betreiber des Katalogs bitten ausdruecklich um einen sprechenden
@@ -61,6 +63,10 @@ app.MapGet("/api/status", (Database db, RecordingCoordinator co, LidarrClient li
             ausgewaehlt = stations.Count(s => s.Enabled),
             bereit = stations.Count(s => s.Enabled && s.PassesQuality(settings) && !s.IsSilent),
             aktiv = co.Running.Count,
+            beobachtet = co.Watching.Count,
+            // Grobe Rechnung fuer die Anzeige: jeder offene Strom kostet seine
+            // Bitrate rund um die Uhr, eine Statusabfrage ein paar Kilobyte.
+            kbits = co.Running.Values.Sum(l => l.Station.MeasuredBitrate),
         },
         wuensche = new
         {
@@ -75,6 +81,8 @@ app.MapGet("/api/status", (Database db, RecordingCoordinator co, LidarrClient li
             schwelle = settings.MatchThreshold,
             minSekunden = settings.MinTrackSeconds,
             maxSekunden = settings.MaxTrackSeconds,
+            beobachten = settings.WatchEnabled,
+            beobachtenSekunden = settings.WatchSeconds,
         },
         pfade = new
         {
@@ -108,12 +116,40 @@ app.MapGet("/api/activity", (RecordingCoordinator co) =>
             nimmtAuf = l.Recording,
         })));
 
+app.MapGet("/api/watching", (RecordingCoordinator co) =>
+    Results.Ok(co.Watching.Values
+        .OrderByDescending(w => w.LastHit).ThenBy(w => w.Station.Name)
+        .Select(w => new
+        {
+            w.Station.Id, w.Station.Name, w.Station.Country,
+            art = w.Station.StatusKind,
+            interpret = w.Artist,
+            titel = w.Title,
+            titelSeit = w.TitleSince,
+            treffer = w.Station.WatchHits,
+            letzterTreffer = w.LastHit,
+            letzterTitel = w.LastHitTitle,
+        })));
+
 // Fuer Uptime Kuma und die Startseite: muss ohne Anmeldung antworten.
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 // ----------------------------------------------------------------- Wuensche
 
-app.MapGet("/api/wishes", (Database db) => Results.Ok(db.GetWishes()));
+// Zu jedem erfuellten Wunsch der Mitschnitt, damit er sich abspielen laesst.
+app.MapGet("/api/wishes", (Database db) =>
+{
+    var played = db.GetCaptures(5000)
+        .Where(c => c.State == CaptureState.Done && c.WishId is not null)
+        .GroupBy(c => c.WishId!.Value)
+        .ToDictionary(g => g.Key, g => g.First().Id);
+    return Results.Ok(db.GetWishes().Select(w => new
+    {
+        w.Id, w.Artist, w.Title, w.Album, w.Source, w.CreatedAt, w.FulfilledAt, w.InLidarr,
+        w.ExpectedSeconds,
+        mitschnitt = played.TryGetValue(w.Id, out var cid) ? cid : (long?)null,
+    }));
+});
 
 app.MapPost("/api/wishes", async (WishInput input, Database db) =>
 {
@@ -167,6 +203,9 @@ app.MapGet("/api/stations", (Database db, RecordingCoordinator co) =>
         tauglich = s.PassesQuality(settings),
         laeuft = running.ContainsKey(s.Id),
         treffer = s.Matches,
+        beobachtetTreffer = s.WatchHits,
+        statusseite = s.StatusKind,
+        beobachtet = co.Watching.ContainsKey(s.Id),
         titel = s.TitlesSeen,
         stumm = s.IsSilent,
         verzug = s.IcyDelay,
@@ -232,6 +271,32 @@ app.MapPost("/api/stations/delete", async (StationIdsInput input, Database db,
 // -------------------------------------------------------------- Mitschnitte
 
 app.MapGet("/api/captures", (Database db) => Results.Ok(db.GetCaptures(500)));
+
+// Einen Mitschnitt im Browser anhoeren. Ausgeliefert wird nur, was in der
+// Datenbank als Mitschnitt steht und unter der Musikbibliothek liegt: so
+// laesst sich ueber die Nummer keine beliebige Datei aus dem Container holen.
+// Mit Range, damit der Browser springen kann, ohne alles zu laden.
+app.MapGet("/api/captures/{id:long}/audio", (long id, Database db) =>
+{
+    var cap = db.GetCapture(id);
+    if (cap?.Path is not { } path || cap.State != CaptureState.Done)
+        return Results.NotFound(new { fehler = "Kein abgelegter Mitschnitt" });
+
+    var full = Path.GetFullPath(path);
+    var root = Path.GetFullPath(settings.LibraryPath).TrimEnd('/') + "/";
+    if (!full.StartsWith(root, StringComparison.Ordinal) || !File.Exists(full))
+        return Results.NotFound(new { fehler = "Datei liegt nicht mehr dort, vielleicht hat Lidarr sie umbenannt" });
+
+    var type = Path.GetExtension(full).ToLowerInvariant() switch
+    {
+        ".mp3" => "audio/mpeg",
+        ".m4a" or ".mp4" => "audio/mp4",
+        ".flac" => "audio/flac",
+        ".ogg" or ".opus" => "audio/ogg",
+        _ => "application/octet-stream",
+    };
+    return Results.File(full, type, enableRangeProcessing: true);
+});
 
 app.Run("http://0.0.0.0:8099");
 

@@ -36,6 +36,7 @@ const SYMBOLE = {
   ab: '<path d="M6 9l6 6 6-6"/>',
   auf: '<path d="M18 15l-6-6-6 6"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  spielen: '<path d="M6 4l14 8-14 8V4z"/>',
   markieren: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
 };
 const sym = (name) =>
@@ -131,6 +132,8 @@ const SEITEN = {
           : etikett("Von Hand", "rahmen") },
       { titel: "Eingetragen", klasse: "schmal weg-klein", wert: (w) => w.createdAt,
         zelle: (w) => `<span title="${esc(datum(w.createdAt))}">${esc(vor(w.createdAt))}</span>` },
+      { titel: "", klasse: "schmal", zelle: (w) => w.mitschnitt
+          ? spielKnopf(w.mitschnitt, `${w.artist} – ${w.title}`) : "" },
       { titel: "Stand", klasse: "schmal", wert: (w) => w.fulfilledAt ?? "",
         zelle: (w) => w.fulfilledAt
           ? etikett("Erfüllt", "erfolg", datum(w.fulfilledAt))
@@ -167,12 +170,13 @@ const SEITEN = {
       ["aktualisieren", "Aktualisieren", (knopf) => neuLaden(knopf)],
     ],
     filter: [["alle", "Alle"], ["mithoeren", "Mithören"], ["laeuft", "Läuft gerade"],
-             ["treffer", "Mit Treffern"], ["stumm", "Sendet keine Titel"],
+             ["beobachtet", "Beobachtet"], ["treffer", "Mit Treffern"], ["stumm", "Sendet keine Titel"],
              ["tauglich", "Tauglich"], ["untauglich", "Untauglich"], ["ungemessen", "Ungemessen"]],
     filtern: (s, f) =>
       f === "mithoeren" ? s.enabled
       : f === "laeuft" ? s.laeuft
-      : f === "treffer" ? s.treffer > 0
+      : f === "beobachtet" ? s.beobachtet
+      : f === "treffer" ? s.treffer > 0 || s.beobachtetTreffer > 0
       : f === "stumm" ? s.stumm
       : f === "tauglich" ? s.tauglich
       : f === "untauglich" ? !!s.gemessen && !s.tauglich
@@ -195,8 +199,11 @@ const SEITEN = {
       { titel: "Codec", klasse: "schmal weg-klein", wert: (s) => s.gemessenCodec ?? "",
         zelle: (s) => esc(s.gemessenCodec ?? "–") },
       { titel: "Treffer", klasse: "zahl schmal", wert: (s) => s.treffer,
-        zelle: (s) => `<span title="${s.titel} Titel gemeldet${s.verzug != null
-          ? `, Meldung kommt ${s.verzug.toFixed(1)} s zu spät` : ""}">${s.treffer || "–"}</span>` },
+        zelle: (s) => `<span title="${s.treffer} aufgenommen, ${s.beobachtetTreffer} beim Beobachten gesehen, ` +
+          `${s.titel} Titel gemeldet${s.verzug != null
+          ? `, Meldung kommt ${s.verzug.toFixed(1)} s zu spät` : ""}">${s.treffer || s.beobachtetTreffer
+          ? `${s.treffer}${s.beobachtetTreffer ? ` <span class="klein">+${s.beobachtetTreffer}</span>` : ""}`
+          : "–"}</span>` },
       { titel: "Zustand", klasse: "schmal", wert: (s) => senderRang(s), zelle: (s) => senderZustand(s) },
     ],
     aktionen: [
@@ -226,10 +233,29 @@ const SEITEN = {
   aktivitaet: {
     titel: "Aktivität",
     symbol: "aktivitaet",
-    laden: () => api("/api/activity"),
+    // Beide Arten in einer Liste: was mithoert (offener Strom, kann
+    // aufnehmen) und was nur beobachtet wird (Statusseite, kann nur zeigen).
+    laden: async () => {
+      const [aktiv, beobachtet] = await Promise.all([api("/api/activity"), api("/api/watching")]);
+      return aktiv.map((a) => ({ ...a, modus: "mithoeren" }))
+        .concat(beobachtet.map((w) => ({ ...w, modus: "beobachtet" })));
+    },
     werkzeug: [["aktualisieren", "Aktualisieren", (knopf) => neuLaden(knopf)]],
+    filter: [["alle", "Alle"], ["mithoeren", "Hört mit"], ["beobachtet", "Beobachtet"],
+             ["treffer", "Beobachtet mit Treffern"]],
+    filtern: (a, f) =>
+      f === "mithoeren" ? a.modus === "mithoeren"
+      : f === "beobachtet" ? a.modus === "beobachtet"
+      : f === "treffer" ? a.modus === "beobachtet" && a.treffer > 0
+      : true,
     suchtext: (a) => `${a.name} ${a.interpret ?? ""} ${a.titel ?? ""}`,
     spalten: [
+      { titel: "Art", klasse: "schmal", wert: (a) => (a.nimmtAuf ? 0 : a.modus === "mithoeren" ? 1 : 2),
+        zelle: (a) => a.nimmtAuf
+          ? `<span class="etikett gefahr"><span class="punkt"></span>Nimmt auf</span>`
+          : a.modus === "mithoeren"
+            ? etikett("Hört mit", "marke", `Audiostrom offen seit ${vor(a.seit)}, kann aufnehmen`)
+            : etikett("Beobachtet", "info", "Liest nur die Titelanzeige des Senders, kann nicht aufnehmen") },
       { titel: "Sender", wert: (a) => a.name.toLowerCase(), zelle: (a) => esc(a.name) },
       { titel: "Läuft gerade", wert: (a) => `${a.interpret ?? ""} ${a.titel ?? ""}`,
         zelle: (a) => a.titel
@@ -237,16 +263,29 @@ const SEITEN = {
           : '<span class="klein">wartet auf die erste Titelmeldung</span>' },
       { titel: "Seit", klasse: "schmal weg-klein", wert: (a) => a.titelSeit ?? "",
         zelle: (a) => esc(vor(a.titelSeit)) },
-      { titel: "Qualität", klasse: "schmal weg-klein", wert: (a) => a.bitrate,
-        zelle: (a) => `${a.bitrate} kbit/s ${esc(a.codec ?? "")}` },
-      { titel: "Zustand", klasse: "schmal", wert: (a) => (a.nimmtAuf ? 0 : 1),
-        zelle: (a) => a.nimmtAuf
-          ? `<span class="etikett gefahr"><span class="punkt"></span>Nimmt auf</span>`
-          : etikett("Hört zu", "marke", `verbunden ${vor(a.seit)}`) },
+      { titel: "Treffer", klasse: "schmal weg-klein", wert: (a) => a.treffer ?? 0,
+        zelle: (a) => a.modus !== "beobachtet" ? ""
+          : a.letzterTreffer
+            ? etikett(`${a.treffer}× · zuletzt ${vor(a.letzterTreffer)}`, "warnung", a.letzterTitel ?? "")
+            : a.treffer ? `${a.treffer}×` : "–" },
     ],
     aktionen: [["aus", "Mithören aus", (ids) => senderSchalten(ids, false)]],
+    hinweise: (s) => {
+      const h = [];
+      const mbit = (s.sender.kbits / 1000).toFixed(1).replace(".", ",");
+      h.push(["info",
+        `Hört mit: ${s.sender.aktiv} Sender mit offenem Audiostrom (zusammen etwa ${mbit} Mbit/s, ` +
+        `rund um die Uhr). Nur sie können aufnehmen. ` +
+        (s.filter.beobachten
+          ? `Beobachtet: ${s.sender.beobachtet} weitere Sender, von denen alle ${s.filter.beobachtenSekunden} s ` +
+            `nur die Titelanzeige gelesen wird, ein paar Kilobyte. Läuft dort ein Wunsch, ist er für ` +
+            `diesmal verpasst, aber der Sender rückt bei der Platzvergabe nach vorn und hört beim ` +
+            `nächsten Mal mit.`
+          : "Das Beobachten weiterer Sender ist ausgeschaltet (AIRCHECKARR_WATCH).")]);
+      return h;
+    },
     leer: (s) =>
-      s.wuensche.offen === 0 ? "Keine offenen Wünsche, deshalb wird gerade nicht mitgehört."
+      s.wuensche.offen === 0 ? "Keine offenen Wünsche, deshalb wird gerade weder mitgehört noch beobachtet."
       : s.sender.bereit === 0 ? "Kein ausgewählter Sender taugt bisher. Unter „Sender“ welche auswählen."
       : "Die Verbindungen werden gerade aufgebaut.",
   },
@@ -272,6 +311,8 @@ const SEITEN = {
       { titel: "Qualität", klasse: "schmal weg-klein", wert: (c) => c.bitrate,
         zelle: (c) => `${c.bitrate} kbit/s ${esc(c.codec ?? "")}` },
       { titel: "Ergebnis", klasse: "schmal", wert: (c) => c.state, zelle: (c) => mitschnittErgebnis(c) },
+      { titel: "", klasse: "schmal", zelle: (c) => c.state === "Done" && c.path
+          ? spielKnopf(c.id, `${c.artist} – ${c.title}`) : "" },
     ],
     leer: () => "Noch nichts mitgeschnitten.",
   },
@@ -296,7 +337,8 @@ function senderRang(s) {
 
 function senderZustand(s) {
   const f = zustand.status?.filter;
-  if (s.laeuft) return etikett("Hört zu", "marke");
+  if (s.laeuft) return etikett("Hört mit", "marke", "Audiostrom offen, kann aufnehmen");
+  if (s.beobachtet) return etikett("Beobachtet", "info", "Liest nur die Titelanzeige, kann nicht aufnehmen");
   if (s.stumm) {
     return etikett("Sendet keine Titel", "gefahr",
       "Nach einer Stunde keine brauchbaren Titelmeldungen. Wird eine Woche übersprungen, " +
@@ -375,6 +417,38 @@ function systemSeite(s) {
     <p class="hilfe">Die Einstellungen stehen in der .env und werden beim Start gelesen,
       siehe docs/10-radiomitschnitt.md.</p>`;
 }
+
+// ------------------------------------------------------------ Abspielen
+// Eine Leiste unten wie in einem Musikspieler. Der Browser holt die Datei
+// stueckweise (Range), Springen geht also ohne alles vorher zu laden.
+const spielKnopf = (id, text) =>
+  `<button class="knopf klein-knopf" data-spielen="${id}" data-text="${esc(text)}"
+     title="Anhören">${sym("spielen")}</button>`;
+
+function abspielen(id, text) {
+  const leiste = $("#spieler");
+  leiste.hidden = false;
+  document.body.classList.add("mit-spieler");
+  $("#spieler-titel").textContent = text;
+  const audio = $("#spieler audio");
+  audio.src = `/api/captures/${id}/audio`;
+  audio.play().catch(() => { /* Autoplay gesperrt: dann eben per Knopf */ });
+}
+
+$("#spieler-zu").addEventListener("click", () => {
+  const audio = $("#spieler audio");
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  $("#spieler").hidden = true;
+  document.body.classList.remove("mit-spieler");
+});
+
+$("#spieler audio").addEventListener("error", () => {
+  if ($("#spieler audio").getAttribute("src")) {
+    meldung("Die Datei lässt sich nicht abspielen. Vielleicht hat Lidarr sie inzwischen umbenannt.", "gefahr");
+  }
+});
 
 // ------------------------------------------------------------- Aktionen
 async function mitFehler(arbeit) {
@@ -754,6 +828,12 @@ $("#werkzeug").addEventListener("change", (e) => {
 
 $("#inhalt").addEventListener("click", async (e) => {
   const seite = SEITEN[zustand.seite];
+
+  const spiel = e.target.closest("[data-spielen]");
+  if (spiel) {
+    abspielen(spiel.dataset.spielen, spiel.dataset.text);
+    return;
+  }
 
   const th = e.target.closest("th.sortierbar");
   if (th) {

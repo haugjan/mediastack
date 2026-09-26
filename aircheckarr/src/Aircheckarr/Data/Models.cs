@@ -47,6 +47,23 @@ public sealed record Station
     /// <summary>Gelungene Mitschnitte von diesem Sender.</summary>
     public int Matches { get; init; }
 
+    /// <summary>
+    /// Welche Statusseite der Server hat (siehe StatusPage), "none" fuer
+    /// keine, leer fuer noch nicht ausprobiert.
+    /// </summary>
+    public string? StatusKind { get; init; }
+
+    /// <summary>
+    /// Wie oft ein Wunsch lief, waehrend der Sender nur beobachtet wurde.
+    /// Aufnehmen ging da nicht, aber es zeigt, wo die Wuensche laufen.
+    /// </summary>
+    public int WatchHits { get; init; }
+
+    /// <summary>Wann die Statusseite zuletzt ausprobiert wurde.</summary>
+    public DateTime? StatusCheckedAt { get; init; }
+
+    public bool CanBeWatched => StatusKind is not null and not Services.StatusPage.None;
+
     /// <summary>Nach einer Woche bekommt ein stummer Sender eine neue Chance.</summary>
     public bool IsSilent => SilentSince is { } s && s > DateTime.UtcNow.AddDays(-7);
 
