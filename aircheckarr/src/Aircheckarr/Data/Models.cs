@@ -48,6 +48,19 @@ public sealed record Wish
     /// <summary>Zum Vergleich vorbereitete Fassung, siehe TitleMatcher.</summary>
     public string NormalizedArtist { get; init; } = "";
     public string NormalizedTitle { get; init; } = "";
+
+    // Wo der Titel in Lidarr steht. Nur damit laesst sich ein Mitschnitt
+    // gezielt diesem einen Titel zuordnen, statt auf Lidarrs eigene
+    // Erkennung zu hoffen, die bei einem einzelnen Titel eines Albums gern
+    // "passt nicht gut genug" sagt.
+    public int? LidarrArtistId { get; init; }
+    public int? LidarrAlbumId { get; init; }
+    public int? LidarrReleaseId { get; init; }
+    public int? LidarrTrackId { get; init; }
+
+    public bool InLidarr =>
+        LidarrArtistId is not null && LidarrAlbumId is not null
+        && LidarrReleaseId is not null && LidarrTrackId is not null;
 }
 
 public enum CaptureState { Recording, Done, Rejected }
@@ -68,6 +81,9 @@ public sealed record Capture
     public string? Path { get; init; }
     public CaptureState State { get; init; }
 
-    /// <summary>Warum verworfen. Leer, wenn alles gut ging.</summary>
+    /// <summary>Warum verworfen, oder ein Hinweis zum Ablegen.</summary>
     public string? Reason { get; init; }
+
+    /// <summary>Lidarr hat die Datei uebernommen und selbst einsortiert.</summary>
+    public bool ImportedByLidarr { get; init; }
 }

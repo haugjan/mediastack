@@ -51,15 +51,51 @@ Interpret" in der Bibliothek.
 
 Zwei Quellen:
 
-- **Von Hand** in der Oberfläche: Interpret, Titel, optional Album.
-- **Aus Lidarr**: der Knopf holt die fehlenden Alben über Lidarrs API und
-  löst sie in einzelne Titel auf. Lidarr denkt in Alben, ein Radiomitschnitt
-  ist ein einzelner Titel — diese Lücke schließt der Import.
+- **Aus Lidarr**, von selbst. Alle 15 Minuten gleicht Aircheckarr Lidarrs
+  Liste *Fehlend* ab und löst jedes Album in seine fehlenden Titel auf.
+  Wünschen heißt also: in Lidarr ein Album beobachten, wie gewohnt. Bekommt
+  Lidarr einen Titel über Torrent oder Usenet schneller, verschwindet der
+  Wunsch beim nächsten Abgleich wieder.
+- **Von Hand** in der Oberfläche: Interpret, Titel, optional Album. Für
+  alles, was Lidarr nicht kennt.
 
 Verglichen wird nicht auf Gleichheit. Sender schreiben denselben Titel auf
 ein Dutzend Arten, deshalb wird normalisiert (Kleinschreibung, Akzente,
 Klammerzusätze, `feat.`, Satzzeichen) und dann mit Levenshtein auf
 Ähnlichkeit geprüft, in beiden Leserichtungen.
+
+## Aircheckarr als Quelle für Lidarr
+
+Ein Mitschnitt zu einem Lidarr-Wunsch landet nicht einfach im
+Musikordner. Er geht über Lidarrs **manuellen Import** zurück, zusammen mit
+den genauen Nummern von Interpret, Album, Ausgabe und Titel. Lidarr benennt
+die Datei um, sortiert sie ein und hakt den Titel ab, genau wie bei einem
+Download.
+
+Warum nicht Lidarrs eigene Erkennung: ein einzelner Titel eines Albums
+„passt" für sie nie gut genug („Couldn't find similar album") und bliebe
+liegen. Aircheckarr weiß aber schon, welcher Titel es ist, und sagt es
+Lidarr direkt.
+
+Die eine Voraussetzung: beide Container sehen die Datei unter demselben
+Pfad. Im Stack ist das so, beide hängen `/data` gleich ein. Lehnt Lidarr
+trotzdem ab, landet der Mitschnitt wie ein Wunsch von Hand direkt in der
+Bibliothek, und in der Liste *Mitschnitte* steht der Grund.
+
+## Sender
+
+Welche Sender mithören, bestimmst du. Unter *Sender suchen* lässt sich der
+Katalog nach Name, Stilrichtung und Land durchsuchen; beliebig viele
+Treffer ankreuzen und gemeinsam übernehmen. In der Senderliste markierst du
+mehrere auf einmal (mit gedrückter Umschalttaste einen ganzen Bereich) und
+schaltest sie gemeinsam an, aus oder entfernst sie. Abgewählte Sender
+werden sofort getrennt.
+
+Mitgehört wird, was ausgewählt ist **und** die Messung besteht. Sind mehr
+Sender bereit als `AIRCHECKARR_MAX_STATIONS`, haben die mit der höchsten
+gemessenen Bitrate Vorrang. Nur beim allerersten Start wählt Aircheckarr
+selbst die 400 beliebtesten Sender vor, damit ohne einen Klick etwas
+passiert.
 
 ## Einstellungen
 
@@ -76,7 +112,9 @@ Alles über Umgebungsvariablen, wie im übrigen Stack.
 | `AIRCHECKARR_MATCH_THRESHOLD` | `0.86` | ab welcher Ähnlichkeit ein Treffer gilt |
 | `AIRCHECKARR_MIN_SECONDS` | `70` | kürzer ist ein Jingle |
 | `AIRCHECKARR_MAX_SECONDS` | `900` | länger ist eine Sendung |
-| `LIDARR_URL`, `LIDARR_API_KEY` | — | für den Wunschimport und den Suchlauf |
+| `AIRCHECKARR_LIDARR_SYNC` | `15` | Abgleich mit Lidarr alle so viele Minuten, `0` = nur auf Knopfdruck |
+| `AIRCHECKARR_LIDARR_ALBUMS` | `250` | höchstens so viele fehlende Alben, die jüngsten zuerst |
+| `LIDARR_URL`, `LIDARR_API_KEY` | — | für Wunschliste und Import |
 
 ## Aufbau
 
@@ -90,8 +128,9 @@ Services/QualityProbe       misst Codec und Bitrate mit ffprobe nach
 Services/IcyStreamListener  hört mit, schneidet an den Titelwechseln
 Services/TitleMatcher       Normalisieren und Ähnlichkeit
 Services/PostProcessor      Ränder schneiden, Tags, einsortieren
-Services/LidarrClient       Wünsche holen, Suchlauf anstoßen
+Services/LidarrClient       Fehlliste abgleichen, Mitschnitte importieren
 Services/RecordingCoordinator  hält den Betrieb am Laufen
+wwwroot/                    Oberfläche im Stil von Sonarr, ohne Build-Schritt
 ```
 
 Einzige Fremdabhängigkeit ist `Microsoft.Data.Sqlite`. Messung, Schnitt und

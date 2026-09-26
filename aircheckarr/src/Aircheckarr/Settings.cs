@@ -40,6 +40,19 @@ public sealed class Settings
     public string? LidarrUrl { get; init; }
     public string? LidarrApiKey { get; init; }
 
+    /// <summary>
+    /// Wie oft Lidarrs Fehlliste abgeglichen wird, in Minuten. 0 schaltet
+    /// den Abgleich ab; der Knopf in der Oberflaeche geht trotzdem.
+    /// </summary>
+    public int LidarrSyncMinutes { get; init; } = 15;
+
+    /// <summary>
+    /// Hoechstens so viele fehlende Alben, die juengsten zuerst. Jedes kostet
+    /// eine Anfrage an Lidarr, und tausend Wuensche machen jeden Titelwechsel
+    /// teurer, ohne dass mehr davon im Radio liefe.
+    /// </summary>
+    public int LidarrMaxAlbums { get; init; } = 250;
+
     /// <summary>Katalogquelle. Ein Spiegel, falls de1 einmal ausfaellt.</summary>
     public string RadioBrowserUrl { get; init; } = "https://de1.api.radio-browser.info";
 
@@ -70,6 +83,8 @@ public sealed class Settings
             MaxTrackSeconds = GetInt("AIRCHECKARR_MAX_SECONDS", 900),
             LidarrUrl = Get("LIDARR_URL"),
             LidarrApiKey = Get("LIDARR_API_KEY"),
+            LidarrSyncMinutes = Math.Max(0, GetInt("AIRCHECKARR_LIDARR_SYNC", 15)),
+            LidarrMaxAlbums = Math.Max(1, GetInt("AIRCHECKARR_LIDARR_ALBUMS", 250)),
             RadioBrowserUrl = Get("AIRCHECKARR_RADIOBROWSER") ?? "https://de1.api.radio-browser.info",
         };
     }

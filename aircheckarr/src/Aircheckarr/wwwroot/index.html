@@ -4,55 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aircheckarr</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header>
-  <h1>aircheckarr</h1>
-  <p id="status">wird geladen …</p>
+<!-- Aufbau wie Sonarr, Radarr und Lidarr: Kopfleiste, Seitenleiste links,
+     Werkzeugleiste ueber dem Inhalt. Wer die anderen kennt, findet sich
+     hier ohne Anleitung zurecht. Gezeichnet wird alles von app.js. -->
+<header class="kopf">
+  <button class="menue" id="menue" aria-label="Menü" title="Menü">
+    <svg class="sym" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+  </button>
+  <a class="marke" href="#/wuensche">
+    <img src="favicon.svg" alt="" width="32" height="32">
+    <span>aircheckarr</span>
+  </a>
+  <label class="suche">
+    <svg class="sym" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input id="suche" type="search" placeholder="Filtern" autocomplete="off" spellcheck="false">
+  </label>
+  <span class="verbindung" id="verbindung" hidden>Keine Verbindung</span>
 </header>
 
-<nav>
-  <button data-tab="wuensche" class="aktiv">Wünsche</button>
-  <button data-tab="sender">Sender</button>
-  <button data-tab="mitschnitte">Mitschnitte</button>
-</nav>
+<aside class="leiste" id="leiste">
+  <nav id="navigation"></nav>
+</aside>
+<div class="leiste-schatten" id="leiste-schatten"></div>
 
-<main>
-  <section id="wuensche">
-    <form id="wunsch-form">
-      <input name="artist" placeholder="Interpret" required>
-      <input name="title" placeholder="Titel" required>
-      <input name="album" placeholder="Album (optional)">
-      <button type="submit">Wünschen</button>
-      <button type="button" id="aus-lidarr">Aus Lidarr übernehmen</button>
-    </form>
-    <p class="hinweis">
-      Was hier steht, wird mitgeschnitten, sobald es irgendwo im Radio läuft.
-      Alles andere läuft durch und wird vergessen.
-    </p>
-    <table id="wunsch-tabelle"></table>
-  </section>
-
-  <section id="sender" hidden>
-    <form id="katalog-form">
-      <input name="tag" placeholder="Stilrichtung, z. B. rock">
-      <input name="country" placeholder="Land, z. B. CH" maxlength="2">
-      <input name="limit" type="number" value="300" min="1" max="2000">
-      <button type="submit">Katalog holen</button>
-      <label><input type="checkbox" id="nur-tauglich" checked> nur taugliche</label>
-    </form>
-    <p class="hinweis">
-      Die Bitrate im Katalog ist Selbstauskunft und oft falsch. Maßgeblich
-      ist die Spalte <strong>gemessen</strong>, die kommt von ffprobe.
-    </p>
-    <table id="sender-tabelle"></table>
-  </section>
-
-  <section id="mitschnitte" hidden>
-    <table id="mitschnitt-tabelle"></table>
-  </section>
+<main class="seite">
+  <div class="werkzeug" id="werkzeug"></div>
+  <div class="inhalt" id="inhalt"></div>
 </main>
+
+<div class="auswahl" id="auswahl" hidden></div>
+<div class="dialog-huelle" id="dialog" hidden></div>
+<div class="meldungen" id="meldungen" aria-live="polite"></div>
 
 <script src="app.js"></script>
 </body>

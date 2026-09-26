@@ -472,8 +472,12 @@ services:
       AIRCHECKARR_MIN_BITRATE: ${AIRCHECKARR_MIN_BITRATE}
       AIRCHECKARR_CODECS: ${AIRCHECKARR_CODECS}
       AIRCHECKARR_MAX_STATIONS: ${AIRCHECKARR_MAX_STATIONS}
-      # Holt sich die fehlenden Alben aus Lidarr und macht Titelwuensche
-      # daraus. Ohne Schluessel laeuft es mit der eigenen Liste weiter.
+      # Lidarrs Fehlliste ist die Wunschliste, und Mitschnitte gehen per
+      # manuellem Import an Lidarr zurueck. Das klappt nur, weil beide
+      # /data gleich einhaengen: Lidarr muss die Datei unter demselben Pfad
+      # finden. Ohne Schluessel laeuft es mit der eigenen Liste weiter.
+      AIRCHECKARR_LIDARR_SYNC: ${AIRCHECKARR_LIDARR_SYNC:-15}
+      AIRCHECKARR_LIDARR_ALBUMS: ${AIRCHECKARR_LIDARR_ALBUMS:-250}
       LIDARR_URL: http://lidarr:8686
       LIDARR_API_KEY: ${LIDARR_API_KEY}
     volumes:

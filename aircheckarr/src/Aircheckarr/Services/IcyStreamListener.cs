@@ -36,6 +36,7 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
         Data.Station station, string workDir, int bitrateKbps,
         ShouldRecord shouldRecord,
         Func<Segment, long, Task> onSegment,
+        Action<string, string>? onTitle,
         CancellationToken ct)
     {
         using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
@@ -126,6 +127,7 @@ public sealed class IcyStreamListener(ILogger<IcyStreamListener> log)
 
                 currentArtist = artist;
                 currentTitle = name;
+                onTitle?.Invoke(artist, name);
 
                 if (!firstTitleSeen)
                 {

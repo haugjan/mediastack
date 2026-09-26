@@ -11,6 +11,11 @@ builder.Logging.AddSimpleConsole(o =>
     o.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
 });
 
+// Zustaende als Wort statt als Zahl, sonst muesste die Oberflaeche die
+// Reihenfolge der Aufzaehlung kennen.
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
 var settings = Settings.FromEnvironment();
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<Database>();
@@ -34,17 +39,20 @@ app.UseStaticFiles();
 
 // ------------------------------------------------------------------ Zustand
 
-app.MapGet("/api/status", (Database db, RecordingCoordinator co) =>
+app.MapGet("/api/status", (Database db, RecordingCoordinator co, LidarrClient lidarr) =>
 {
     var stations = db.GetStations(limit: 100000);
     var wishes = db.GetWishes();
     return Results.Ok(new
     {
+        version = typeof(Settings).Assembly.GetName().Version?.ToString(3),
         sender = new
         {
             gesamt = stations.Count,
             gemessen = stations.Count(s => s.MeasuredAt is not null),
             tauglich = stations.Count(s => s.PassesQuality(settings)),
+            ausgewaehlt = stations.Count(s => s.Enabled),
+            bereit = stations.Count(s => s.Enabled && s.PassesQuality(settings)),
             aktiv = co.Running.Count,
         },
         wuensche = new
@@ -52,17 +60,46 @@ app.MapGet("/api/status", (Database db, RecordingCoordinator co) =>
             offen = wishes.Count(w => w.FulfilledAt is null),
             erfuellt = wishes.Count(w => w.FulfilledAt is not null),
         },
-        laeuft = co.Running.Keys
-            .Select(id => stations.FirstOrDefault(s => s.Id == id)?.Name ?? id)
-            .OrderBy(n => n).ToArray(),
         filter = new
         {
             mindestbitrate = settings.MinBitrateKbps,
             codecs = settings.AllowedCodecs,
             maxSender = settings.MaxConcurrentStations,
+            schwelle = settings.MatchThreshold,
+            minSekunden = settings.MinTrackSeconds,
+            maxSekunden = settings.MaxTrackSeconds,
         },
+        pfade = new
+        {
+            bibliothek = settings.LibraryPath,
+            arbeit = settings.WorkPath,
+            datenbank = settings.DatabasePath,
+        },
+        lidarr = new
+        {
+            verbunden = lidarr.Configured,
+            abgleichMinuten = lidarr.Configured ? settings.LidarrSyncMinutes : 0,
+            maxAlben = settings.LidarrMaxAlbums,
+            letzterAbgleich = co.LastLidarrSync,
+        },
+        katalog = settings.RadioBrowserUrl,
     });
 });
+
+app.MapGet("/api/activity", (RecordingCoordinator co) =>
+    Results.Ok(co.Running.Values
+        .OrderByDescending(l => l.Recording).ThenBy(l => l.Station.Name)
+        .Select(l => new
+        {
+            l.Station.Id, l.Station.Name, l.Station.Country,
+            bitrate = l.Station.MeasuredBitrate,
+            codec = l.Station.MeasuredCodec,
+            seit = l.Since,
+            interpret = l.Artist,
+            titel = l.Title,
+            titelSeit = l.TitleSince,
+            nimmtAuf = l.Recording,
+        })));
 
 // Fuer Uptime Kuma und die Startseite: muss ohne Anmeldung antworten.
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
@@ -87,33 +124,31 @@ app.MapPost("/api/wishes", async (WishInput input, Database db) =>
     return Results.Ok(new { id, bekannt = id == 0 });
 });
 
-app.MapDelete("/api/wishes/{id:long}", async (long id, Database db) =>
+app.MapPost("/api/wishes/delete", async (WishIdsInput input, Database db) =>
 {
-    await db.DeleteWishAsync(id);
+    await db.DeleteWishesAsync(input.Ids ?? []);
     return Results.Ok();
 });
 
-app.MapPost("/api/wishes/import-lidarr", async (LidarrClient lidarr, Database db,
-                                                CancellationToken ct) =>
+// Sofortiger Abgleich. Laeuft sonst ohnehin alle paar Minuten von selbst.
+app.MapPost("/api/wishes/sync-lidarr", async (LidarrClient lidarr, RecordingCoordinator co,
+                                              CancellationToken ct) =>
 {
     if (!lidarr.Configured)
         return Results.BadRequest(new { fehler = "LIDARR_URL und LIDARR_API_KEY fehlen" });
 
-    var found = await lidarr.GetMissingTracksAsync(25, ct);
-    var added = 0;
-    foreach (var w in found)
-        if (await db.AddWishAsync(w) != 0) added++;
-
-    return Results.Ok(new { gefunden = found.Count, uebernommen = added });
+    var result = await co.SyncLidarrAsync(ct);
+    return result is null
+        ? Results.Json(new { fehler = "Lidarr antwortet nicht" }, statusCode: 502)
+        : Results.Ok(new { fehlend = result.Wanted, neu = result.Added, erledigt = result.Removed });
 });
 
 // ------------------------------------------------------------------- Sender
 
-app.MapGet("/api/stations", (Database db, bool? onlyUsable) =>
+app.MapGet("/api/stations", (Database db, RecordingCoordinator co) =>
 {
-    var stations = db.GetStations(limit: 2000);
-    if (onlyUsable == true) stations = stations.Where(s => s.PassesQuality(settings)).ToList();
-    return Results.Ok(stations.Select(s => new
+    var running = co.Running;
+    return Results.Ok(db.GetStations(limit: 5000).Select(s => new
     {
         s.Id, s.Name, s.Country, s.Tags, s.Url,
         katalogBitrate = s.CatalogBitrate,
@@ -123,28 +158,73 @@ app.MapGet("/api/stations", (Database db, bool? onlyUsable) =>
         fehler = s.MeasureError,
         s.Enabled,
         tauglich = s.PassesQuality(settings),
+        laeuft = running.ContainsKey(s.Id),
     }));
+});
+
+// Durchsucht den Katalog, ohne etwas zu speichern. Uebernommen wird erst,
+// was im Dialog angekreuzt und bestaetigt ist.
+app.MapGet("/api/catalog", async (string? name, string? tag, string? country, int? limit,
+                                  RadioBrowserClient catalog, Database db, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(tag)
+        && string.IsNullOrWhiteSpace(country))
+        return Results.BadRequest(new { fehler = "Name, Stilrichtung oder Land angeben" });
+
+    var known = db.GetStations(limit: 100000).ToDictionary(s => s.Id);
+    var found = await catalog.FetchAsync(tag, country, name, Math.Clamp(limit ?? 100, 1, 500), ct);
+    return Results.Ok(found.Select(s => new
+    {
+        s.Id, s.Name, s.Country, s.Tags,
+        katalogBitrate = s.CatalogBitrate,
+        katalogCodec = s.CatalogCodec,
+        bekannt = known.ContainsKey(s.Id),
+        ausgewaehlt = known.TryGetValue(s.Id, out var k) && k.Enabled,
+    }));
+});
+
+app.MapPost("/api/stations/add", async (StationIdsInput input, RecordingCoordinator co,
+                                        CancellationToken ct) =>
+{
+    var ids = (input.Ids ?? []).Distinct().ToList();
+    if (ids.Count == 0) return Results.BadRequest(new { fehler = "Kein Sender angegeben" });
+    return Results.Ok(new { uebernommen = await co.AddStationsAsync(ids, ct) });
 });
 
 app.MapPost("/api/stations/refresh", async (CatalogInput input, RecordingCoordinator co,
                                             CancellationToken ct) =>
 {
-    await co.RefreshCatalogAsync(input.Tag, input.Country, Math.Clamp(input.Limit, 1, 2000), ct);
+    var count = await co.RefreshCatalogAsync(input.Tag, input.Country,
+                                             Math.Clamp(input.Limit, 1, 2000), input.Select, ct);
+    return Results.Ok(new { geholt = count });
+});
+
+app.MapPost("/api/stations/enabled", async (StationIdsInput input, Database db,
+                                            RecordingCoordinator co) =>
+{
+    var ids = input.Ids ?? [];
+    await db.SetStationsEnabledAsync(ids, input.Enabled);
+    // Abwaehlen soll sofort wirken, nicht erst in der naechsten Runde.
+    if (!input.Enabled) co.StopListening(ids);
     return Results.Ok();
 });
 
-app.MapPost("/api/stations/{id}/enabled", async (string id, EnabledInput input, Database db) =>
+app.MapPost("/api/stations/delete", async (StationIdsInput input, Database db,
+                                           RecordingCoordinator co) =>
 {
-    await db.SetStationEnabledAsync(id, input.Enabled);
+    var ids = input.Ids ?? [];
+    await db.DeleteStationsAsync(ids);
+    co.StopListening(ids);
     return Results.Ok();
 });
 
 // -------------------------------------------------------------- Mitschnitte
 
-app.MapGet("/api/captures", (Database db) => Results.Ok(db.GetCaptures(200)));
+app.MapGet("/api/captures", (Database db) => Results.Ok(db.GetCaptures(500)));
 
 app.Run("http://0.0.0.0:8099");
 
 internal sealed record WishInput(string Artist, string Title, string? Album);
-internal sealed record CatalogInput(string? Tag, string? Country, int Limit = 300);
-internal sealed record EnabledInput(bool Enabled);
+internal sealed record WishIdsInput(long[]? Ids);
+internal sealed record StationIdsInput(string[]? Ids, bool Enabled = true);
+internal sealed record CatalogInput(string? Tag, string? Country, int Limit = 300, bool Select = false);

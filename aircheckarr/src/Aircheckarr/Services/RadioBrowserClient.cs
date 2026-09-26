@@ -32,7 +32,7 @@ public sealed class RadioBrowserClient(HttpClient http, Settings settings,
     /// erreichbare Sender mit passendem Codec; alles Weitere entscheidet
     /// die eigene Messung.
     /// </summary>
-    public async Task<List<Station>> FetchAsync(string? tag, string? country,
+    public async Task<List<Station>> FetchAsync(string? tag, string? country, string? name,
                                                 int limit, CancellationToken ct)
     {
         var query = new List<string>
@@ -42,11 +42,30 @@ public sealed class RadioBrowserClient(HttpClient http, Settings settings,
             "reverse=true",
             $"limit={limit}",
         };
-        if (!string.IsNullOrWhiteSpace(tag)) query.Add($"tagList={Uri.EscapeDataString(tag)}");
+        if (!string.IsNullOrWhiteSpace(tag)) query.Add($"tagList={Uri.EscapeDataString(tag.Trim())}");
         if (!string.IsNullOrWhiteSpace(country))
-            query.Add($"countrycode={Uri.EscapeDataString(country)}");
+            query.Add($"countrycode={Uri.EscapeDataString(country.Trim())}");
+        // Teilstring, nicht exakt: "swiss pop" findet auch "Radio Swiss Pop".
+        if (!string.IsNullOrWhiteSpace(name)) query.Add($"name={Uri.EscapeDataString(name.Trim())}");
 
-        var url = $"{settings.RadioBrowserUrl}/json/stations/search?{string.Join('&', query)}";
+        return await LoadAsync($"stations/search?{string.Join('&', query)}", ct);
+    }
+
+    /// <summary>
+    /// Holt genau die angegebenen Sender. So kommen Adresse und Codec aus dem
+    /// Katalog und nicht aus dem, was der Browser zurueckschickt.
+    /// </summary>
+    public async Task<List<Station>> FetchByIdsAsync(IReadOnlyCollection<string> ids,
+                                                     CancellationToken ct)
+    {
+        if (ids.Count == 0) return [];
+        var list = string.Join(',', ids.Select(Uri.EscapeDataString));
+        return await LoadAsync($"stations/byuuid?uuids={list}", ct);
+    }
+
+    private async Task<List<Station>> LoadAsync(string path, CancellationToken ct)
+    {
+        var url = $"{settings.RadioBrowserUrl}/json/{path}";
         log.LogInformation("Katalog abrufen: {Url}", url);
 
         var entries = await http.GetFromJsonAsync<List<Entry>>(url, ct) ?? [];
@@ -56,7 +75,7 @@ public sealed class RadioBrowserClient(HttpClient http, Settings settings,
             // Playlisten und Videostreams fliegen sofort raus, die kann der
             // Mitschneider nicht lesen.
             .Where(e => !(e.UrlResolved ?? e.Url)!.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
-            .Where(e => e.Codec is null
+            .Where(e => string.IsNullOrEmpty(e.Codec)
                         || settings.AllowedCodecs.Contains(e.Codec.ToLowerInvariant()))
             .Select(e => new Station
             {
@@ -65,14 +84,14 @@ public sealed class RadioBrowserClient(HttpClient http, Settings settings,
                 Url = (e.UrlResolved ?? e.Url)!,
                 Country = e.Country,
                 Tags = e.Tags,
-                CatalogCodec = e.Codec?.ToLowerInvariant(),
+                CatalogCodec = string.IsNullOrEmpty(e.Codec) ? null : e.Codec.ToLowerInvariant(),
                 // Unsinnige Werte gar nicht erst uebernehmen.
                 CatalogBitrate = e.Bitrate is > 0 and <= 640 ? e.Bitrate : 0,
             })
             .DistinctBy(s => s.Id)
             .ToList();
 
-        log.LogInformation("{Zahl} Sender aus dem Katalog uebernommen", stations.Count);
+        log.LogInformation("{Zahl} Sender aus dem Katalog", stations.Count);
         return stations;
     }
 }

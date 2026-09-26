@@ -27,8 +27,13 @@ public sealed partial class PostProcessor(Settings settings, ILogger<PostProcess
 
     public sealed record Result(bool Ok, string? Path, double Seconds, string? Reason);
 
+    /// <param name="handoverDir">
+    /// Gesetzt, wenn Lidarr die Datei uebernimmt: dann landet sie dort statt
+    /// in der Bibliothek, und Lidarr sortiert sie selbst ein.
+    /// </param>
     public async Task<Result> FinalizeAsync(string tempPath, string artist, string title,
-                                            string? album, CancellationToken ct)
+                                            string? album, string? handoverDir,
+                                            CancellationToken ct)
     {
         var duration = await GetDurationAsync(tempPath, ct);
         if (duration <= 0)
@@ -55,7 +60,9 @@ public sealed partial class PostProcessor(Settings settings, ILogger<PostProcess
         var codec = Path.GetExtension(tempPath).TrimStart('.').ToLowerInvariant();
         var extension = codec == "mp3" ? ".mp3" : ".m4a";
 
-        var target = BuildTargetPath(artist, title, album, extension);
+        var target = handoverDir is null
+            ? LibraryPathFor(artist, title, album, extension)
+            : Path.Combine(handoverDir, Clean($"{artist} - {title}") + extension);
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
 
         var args = new List<string>
@@ -130,14 +137,15 @@ public sealed partial class PostProcessor(Settings settings, ILogger<PostProcess
                                             CultureInfo.InvariantCulture, out var d) ? d : 0;
     }
 
-    private string BuildTargetPath(string artist, string title, string? album, string extension)
+    private static string Clean(string s)
     {
-        string Clean(string s)
-        {
-            var c = UnsafeFileChars().Replace(s.Trim(), "").Trim();
-            return c.Length == 0 ? "Unbekannt" : c[..Math.Min(c.Length, 100)];
-        }
+        var c = UnsafeFileChars().Replace(s.Trim(), "").Trim();
+        return c.Length == 0 ? "Unbekannt" : c[..Math.Min(c.Length, 100)];
+    }
 
+    /// <summary>Ablage ohne Lidarr, und Rueckfall, wenn Lidarr ablehnt.</summary>
+    public string LibraryPathFor(string artist, string title, string? album, string extension)
+    {
         // Aufbau wie in der uebrigen Bibliothek: Interpret/Album/Titel.
         // Radiomitschnitte gehoeren zu keinem Album, deshalb ein eigener
         // Ordner statt eines erfundenen Albumnamens.

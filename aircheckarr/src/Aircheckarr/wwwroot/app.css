@@ -1,51 +1,350 @@
+/* Aussehen wie Sonarr, Radarr und Lidarr: dieselbe Aufteilung, dieselben
+   Etikettenfarben, eigene Markenfarbe. Hell und dunkel folgen dem System,
+   so wie die anderen Apps es mit "auto" tun. */
 :root {
-  --bg: #fbfbfa; --fg: #1d1c1a; --schwach: #6b6a67;
-  --linie: #e3e2df; --feld: #ffffff; --akzent: #b4532a;
-  --gut: #2f6f4f; --schlecht: #9b3b3b;
+  --marke: #7e57c2;
+  --seite-bg: #f5f7fa;
+  --flaeche: #ffffff;
+  --kopf-bg: #7e57c2;
+  --kopf-text: #ffffff;
+  --leiste-bg: #3a3f51;
+  --leiste-text: #e1e2e3;
+  --leiste-aktiv-bg: #333746;
+  --werkzeug-bg: #ffffff;
+  --werkzeug-text: #5f6164;
+  --text: #515253;
+  --schwach: #909293;
+  --linie: #dee2e6;
+  --zeile-hover: #f7f8fa;
+  --eingabe-bg: #ffffff;
+  --eingabe-rand: #dde6e9;
+  --ueberlagerung: rgba(0, 0, 0, 0.55);
+  --erfolg: #27c24c;
+  --gefahr: #f05050;
+  --warnung: #ffa500;
+  --info: #5d9cec;
+  --standard-bg: #e8e9ea;
+  --standard-text: #515253;
+  --schatten: 0 2px 10px rgba(0, 0, 0, 0.15);
 }
+
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1b1b19; --fg: #eceae5; --schwach: #9a9892;
-    --linie: #333230; --feld: #232220; --akzent: #d97a4e;
-    --gut: #6fbf90; --schlecht: #d98080;
+    --marke: #a78bfa;
+    --seite-bg: #202020;
+    --flaeche: #2a2a2a;
+    --kopf-bg: #2a2a2a;
+    --kopf-text: #e1e2e3;
+    --leiste-bg: #2a2a2a;
+    --leiste-text: #e1e2e3;
+    --leiste-aktiv-bg: #333333;
+    --werkzeug-bg: #262626;
+    --werkzeug-text: #e1e2e3;
+    --text: #cccccc;
+    --schwach: #8e8e8e;
+    --linie: #3a3a3a;
+    --zeile-hover: rgba(255, 255, 255, 0.04);
+    --eingabe-bg: #333333;
+    --eingabe-rand: #474747;
+    --ueberlagerung: rgba(0, 0, 0, 0.7);
+    --standard-bg: #3d3d3d;
+    --standard-text: #cccccc;
+    --schatten: 0 2px 12px rgba(0, 0, 0, 0.5);
   }
 }
+
 * { box-sizing: border-box; }
+html, body { margin: 0; }
 body {
-  margin: 0; padding: 0 16px 48px; background: var(--bg); color: var(--fg);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  max-width: 1100px; margin-inline: auto;
+  background: var(--seite-bg);
+  color: var(--text);
+  font: 14px/1.45 "Roboto", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
 }
-header { padding: 28px 0 8px; }
-h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
-#status { margin: 6px 0 0; color: var(--schwach); font-size: 14px; }
-nav { display: flex; gap: 4px; border-bottom: 1px solid var(--linie); margin: 16px 0 20px; }
-nav button {
-  background: none; border: none; border-bottom: 2px solid transparent;
-  padding: 9px 14px; font: inherit; color: var(--schwach); cursor: pointer;
+a { color: var(--marke); }
+button, input, select { font: inherit; color: inherit; }
+
+.sym {
+  width: 18px; height: 18px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
 }
-nav button.aktiv { color: var(--fg); border-bottom-color: var(--akzent); }
-form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-input[type=text], input:not([type]), input[type=number] {
-  padding: 8px 10px; border: 1px solid var(--linie); border-radius: 6px;
-  background: var(--feld); color: var(--fg); font: inherit; min-width: 150px; flex: 1 1 160px;
+
+/* ------------------------------------------------------------ Kopfleiste */
+.kopf {
+  position: fixed; inset: 0 0 auto 0; height: 60px; z-index: 30;
+  display: flex; align-items: center; gap: 16px;
+  padding-right: 20px;
+  background: var(--kopf-bg); color: var(--kopf-text);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.25);
 }
-form button {
-  padding: 8px 14px; border: 1px solid var(--linie); border-radius: 6px;
-  background: var(--feld); color: var(--fg); font: inherit; cursor: pointer;
+.marke {
+  display: flex; align-items: center; gap: 10px;
+  width: 210px; padding-left: 20px; flex: none;
+  color: inherit; text-decoration: none; font-size: 19px; font-weight: 500;
 }
-form button[type=submit] { background: var(--akzent); border-color: var(--akzent); color: #fff; }
-label { display: flex; align-items: center; gap: 6px; color: var(--schwach); font-size: 14px; }
-.hinweis { color: var(--schwach); font-size: 13px; margin: 4px 0 16px; max-width: 70ch; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--linie); }
-th { color: var(--schwach); font-weight: 500; font-size: 13px; }
-td.zahl, th.zahl { text-align: right; font-variant-numeric: tabular-nums; }
-.gut { color: var(--gut); }
-.schlecht { color: var(--schlecht); }
-.leer { color: var(--schwach); padding: 24px 0; }
-button.klein {
-  background: none; border: 1px solid var(--linie); border-radius: 5px;
-  padding: 3px 9px; font: inherit; font-size: 13px; color: var(--schwach); cursor: pointer;
+.menue {
+  display: none; background: none; border: 0; padding: 0 0 0 16px;
+  color: inherit; cursor: pointer;
 }
-@media (max-width: 640px) { .weg-klein { display: none; } }
+.menue .sym { width: 22px; height: 22px; }
+.suche {
+  display: flex; align-items: center; gap: 8px;
+  flex: 0 1 320px; color: inherit; opacity: 0.85;
+}
+.suche input {
+  width: 100%; background: transparent; border: 0;
+  border-bottom: 1px solid currentColor; color: inherit;
+  padding: 6px 2px; outline: none;
+}
+.suche input::placeholder { color: inherit; opacity: 0.7; }
+.suche[hidden] { display: none; }
+.verbindung {
+  margin-left: auto; padding: 3px 10px; border-radius: 3px;
+  background: var(--gefahr); color: #fff; font-size: 13px;
+}
+
+/* --------------------------------------------------------- Seitenleiste */
+.leiste {
+  position: fixed; top: 60px; bottom: 0; left: 0; width: 210px; z-index: 20;
+  background: var(--leiste-bg); color: var(--leiste-text);
+  overflow-y: auto; padding-top: 4px;
+}
+.leiste a {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 24px 12px 21px;
+  border-left: 3px solid transparent;
+  color: inherit; text-decoration: none;
+}
+.leiste a:hover { color: var(--marke); }
+.leiste a.aktiv {
+  border-left-color: var(--marke); color: var(--marke);
+  background: var(--leiste-aktiv-bg);
+}
+.leiste a .zaehler {
+  margin-left: auto; min-width: 22px; padding: 0 6px; border-radius: 10px;
+  background: var(--marke); color: #fff; font-size: 12px; text-align: center;
+}
+.leiste a .zaehler:empty { display: none; }
+.leiste-schatten { display: none; }
+
+/* ------------------------------------------------------------ Hauptteil */
+.seite { margin: 60px 0 0 210px; min-height: calc(100vh - 60px); }
+body.mit-auswahl .seite { padding-bottom: 64px; }
+
+.werkzeug {
+  position: sticky; top: 60px; z-index: 10;
+  display: flex; justify-content: space-between; align-items: stretch;
+  min-height: 60px; padding: 0 10px;
+  background: var(--werkzeug-bg); color: var(--werkzeug-text);
+  border-bottom: 1px solid var(--linie);
+}
+.wz-links, .wz-rechts { display: flex; align-items: stretch; }
+.wz {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  min-width: 64px; padding: 4px 10px;
+  background: none; border: 0; color: inherit; cursor: pointer;
+  font-size: 12px; white-space: nowrap;
+}
+.wz .sym { width: 21px; height: 21px; }
+.wz:hover:not(:disabled) { color: var(--marke); }
+.wz:disabled { opacity: 0.5; cursor: default; }
+.wz.dreht .sym { animation: drehen 1s linear infinite; }
+@keyframes drehen { to { transform: rotate(360deg); } }
+.trenner { width: 1px; margin: 12px 8px; background: var(--linie); }
+.wz-filter {
+  display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 13px;
+}
+.wz-filter select {
+  background: var(--eingabe-bg); border: 1px solid var(--eingabe-rand);
+  border-radius: 4px; padding: 5px 8px;
+}
+
+.inhalt { padding: 20px; }
+.laedt, .leer { color: var(--schwach); padding: 30px 0; text-align: center; }
+.fuss-zahl { color: var(--schwach); font-size: 13px; margin-top: 12px; }
+
+/* ------------------------------------------------------------ Hinweise */
+.hinweis {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin-bottom: 16px; padding: 12px 15px; border-radius: 4px;
+  border-left: 4px solid var(--info); background: var(--flaeche);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.hinweis.warnung { border-left-color: var(--warnung); }
+.hinweis.gefahr { border-left-color: var(--gefahr); }
+.hinweis.erfolg { border-left-color: var(--erfolg); }
+.hinweis .sym { margin-top: 1px; color: var(--schwach); }
+
+/* ------------------------------------------------------------- Tabellen */
+/* Seitlich scrollen statt die Seite zu sprengen, wenn es eng wird */
+.tabelle-huelle { overflow-x: auto; }
+.tabelle { width: 100%; border-collapse: collapse; }
+.tabelle th, .tabelle td {
+  padding: 8px; text-align: left; vertical-align: middle;
+  border-top: 1px solid var(--linie);
+}
+.tabelle thead th {
+  border-top: 0; font-weight: 500; white-space: nowrap; user-select: none;
+}
+.tabelle th.sortierbar { cursor: pointer; }
+.tabelle th.sortierbar:hover { color: var(--marke); }
+.tabelle th .sym { width: 14px; height: 14px; vertical-align: -2px; margin-left: 3px; }
+.tabelle tbody tr:hover { background: var(--zeile-hover); }
+.tabelle tr.markiert { background: var(--zeile-hover); }
+.tabelle .zahl { text-align: right; font-variant-numeric: tabular-nums; }
+.tabelle .schmal { width: 1%; white-space: nowrap; }
+.tabelle .klein { color: var(--schwach); font-size: 12px; }
+.tabelle td.aus { opacity: 0.55; }
+.tabelle input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--marke); cursor: pointer; }
+.tabelle.klickbar tbody tr { cursor: pointer; }
+
+/* ----------------------------------------------------------- Etiketten */
+.etikett {
+  display: inline-block; padding: 1px 7px; border-radius: 2px;
+  border: 1px solid var(--standard-bg); background: var(--standard-bg); color: var(--standard-text);
+  font-size: 12px; line-height: 1.6; white-space: nowrap;
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+}
+.etikett.erfolg { background: var(--erfolg); border-color: var(--erfolg); color: #fff; }
+.etikett.gefahr { background: var(--gefahr); border-color: var(--gefahr); color: #fff; }
+.etikett.warnung { background: var(--warnung); border-color: var(--warnung); color: #fff; }
+.etikett.info { background: var(--info); border-color: var(--info); color: #fff; }
+.etikett.marke { background: var(--marke); border-color: var(--marke); color: #fff; }
+.etikett.rahmen { background: transparent; color: var(--schwach); border-color: var(--linie); }
+.punkt {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor; margin-right: 5px; vertical-align: 1px;
+  animation: pulsieren 1.2s ease-in-out infinite;
+}
+@keyframes pulsieren { 50% { opacity: 0.25; } }
+
+/* Schalter fuer "Mithoeren", wie die Beobachten-Fahne der anderen Apps */
+.schalter {
+  position: relative; width: 36px; height: 20px; padding: 0; flex: none;
+  border: 0; border-radius: 10px; background: var(--standard-bg); cursor: pointer;
+  transition: background 0.15s;
+}
+.schalter::after {
+  content: ""; position: absolute; top: 3px; left: 3px;
+  width: 14px; height: 14px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); transition: left 0.15s;
+}
+.schalter.an { background: var(--marke); }
+.schalter.an::after { left: 19px; }
+
+/* ------------------------------------------------------------- Knoepfe */
+.knopf {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--eingabe-rand); background: var(--flaeche); color: var(--text);
+  white-space: nowrap;
+}
+.knopf:hover:not(:disabled) { filter: brightness(0.96); }
+.knopf:disabled { opacity: 0.55; cursor: default; }
+.knopf .sym { width: 15px; height: 15px; }
+.knopf.primaer { background: var(--marke); border-color: var(--marke); color: #fff; }
+.knopf.gefahr { background: var(--gefahr); border-color: var(--gefahr); color: #fff; }
+.knopf.erfolg { background: var(--erfolg); border-color: var(--erfolg); color: #fff; }
+
+/* ------------------------------------------------ Leiste fuer Markiertes */
+.auswahl {
+  position: fixed; left: 210px; right: 0; bottom: 0; z-index: 15;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 12px 20px; background: var(--werkzeug-bg); color: var(--werkzeug-text);
+  border-top: 1px solid var(--linie); box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.12);
+}
+.auswahl[hidden] { display: none; }
+.auswahl .anzahl { font-weight: 500; }
+.auswahl .knoepfe { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+
+/* -------------------------------------------------------------- Dialoge */
+.dialog-huelle {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 60px 16px 16px; background: var(--ueberlagerung); overflow-y: auto;
+}
+.dialog-huelle[hidden] { display: none; }
+.dialog {
+  width: 100%; max-width: 600px; border-radius: 6px;
+  background: var(--flaeche); box-shadow: var(--schatten);
+  display: flex; flex-direction: column; max-height: calc(100vh - 80px);
+}
+.dialog.breit { max-width: 1000px; }
+.dialog-kopf {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 15px 20px; border-bottom: 1px solid var(--linie); font-size: 18px;
+}
+.dialog-kopf button { background: none; border: 0; cursor: pointer; color: var(--schwach); padding: 4px; }
+.dialog-rumpf { padding: 20px; overflow-y: auto; }
+.dialog-fuss {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap;
+  padding: 15px 20px; border-top: 1px solid var(--linie);
+}
+.dialog-fuss .fuss-info { margin-right: auto; color: var(--schwach); }
+
+.formular { display: grid; gap: 14px; }
+.formular label, .feld { display: grid; gap: 5px; font-weight: 500; }
+.formular label small { font-weight: 400; color: var(--schwach); }
+.formular .reihe { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.hilfe { margin: 0; color: var(--schwach); font-size: 13px; font-weight: 400; }
+input[type=text], input[type=number], input[type=search]:not(#suche), input:not([type]) {
+  width: 100%; padding: 7px 10px; border-radius: 4px;
+  border: 1px solid var(--eingabe-rand); background: var(--eingabe-bg);
+  outline: none;
+}
+input:focus-visible:not(#suche) { border-color: var(--marke); }
+input[type=checkbox] { accent-color: var(--marke); }
+
+.suchzeile { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.suchzeile input { flex: 1 1 180px; width: auto; }
+.suchzeile input.kurz { flex: 0 0 90px; }
+
+/* -------------------------------------------------------------- System */
+.kasten {
+  margin-bottom: 20px; padding: 0 20px 10px; border-radius: 4px;
+  background: var(--flaeche); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.kasten h2 {
+  margin: 0 -20px 10px; padding: 12px 20px;
+  border-bottom: 1px solid var(--linie); font-size: 16px; font-weight: 500;
+}
+.eigenschaften { display: grid; grid-template-columns: max-content 1fr; gap: 8px 24px; margin: 0; }
+.eigenschaften dt { font-weight: 500; }
+.eigenschaften dd { margin: 0; word-break: break-all; }
+
+/* ----------------------------------------------------------- Meldungen */
+.meldungen {
+  position: fixed; left: 230px; bottom: 20px; z-index: 60;
+  display: flex; flex-direction: column; gap: 8px; max-width: 380px;
+}
+.meldung {
+  padding: 12px 16px; border-radius: 4px; border-left: 4px solid var(--info);
+  background: var(--flaeche); box-shadow: var(--schatten);
+  transition: opacity 0.4s;
+}
+.meldung.erfolg { border-left-color: var(--erfolg); }
+.meldung.gefahr { border-left-color: var(--gefahr); }
+.meldung.warnung { border-left-color: var(--warnung); }
+.meldung.weg { opacity: 0; }
+
+/* ------------------------------------------------------------ Schmal */
+@media (max-width: 768px) {
+  .menue { display: block; }
+  .marke { width: auto; padding-left: 0; }
+  .marke span { display: none; }
+  .suche { flex: 1 1 auto; }
+  .leiste { transform: translateX(-100%); transition: transform 0.2s; }
+  body.leiste-offen .leiste { transform: none; }
+  body.leiste-offen .leiste-schatten {
+    display: block; position: fixed; inset: 60px 0 0 0; z-index: 19; background: var(--ueberlagerung);
+  }
+  .seite { margin-left: 0; }
+  .auswahl { left: 0; }
+  .meldungen { left: 16px; right: 16px; }
+  .inhalt { padding: 12px 16px; }
+  .wz { min-width: 44px; padding: 4px 6px; }
+  .wz span { display: none; }
+  .weg-klein { display: none; }
+  .tabelle { font-size: 13px; }
+  .tabelle th, .tabelle td { padding: 7px 5px; }
+}
