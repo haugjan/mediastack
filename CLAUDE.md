@@ -66,26 +66,46 @@ Listener auf 8443 sitzt und dass er nur das eigene Subnetz durchlässt.
 
 ## Compose-Profile
 
-`COMPOSE_PROFILES` in der `.env` entscheidet, was überhaupt startet;
-`setup.sh` setzt es selbst, von Hand hantiert niemand damit.
+**Jeder Dienst hat sein eigenes Profil**, benannt wie er selbst. Ohne
+Profile startet deshalb gar nichts — `COMPOSE_PROFILES` in der `.env` ist die
+Liste dessen, was laufen soll, und `setup.sh` schreibt sie aus der Auswahl,
+die es gleich zu Beginn abfragt. Von Hand hantiert damit niemand.
+
+Drei Profile stehen für mehr als einen Container, weil die Teile einzeln
+nicht lauffähig wären:
 
 | Profil | Dienste | Braucht |
 |---|---|---|
-| (ohne) | Plex, *arr, Navidrome, Audiobookshelf, Overseerr, Homepage, Uptime Kuma, Tautulli, Recyclarr, Unpackerr, Cleanuparr, Backfill | nichts |
 | `torrent` | Gluetun, qBittorrent | ProtonVPN-Schlüssel |
-| `usenet` | SABnzbd | Usenet-Abo |
 | `docs` | Paperless samt Postgres, Redis, Gotenberg, Tika | nichts |
 | `proxy` | Caddy | Domain und Azure DNS |
-| `radio` | Aircheckarr | nichts, der Bau dauert nur |
-| `extras` | Kometa, Scrutiny | Plex-Token bzw. Plattenliste |
 
-Neuer Dienst, der Zugangsdaten braucht: **immer hinter ein Profil**. Ohne
-Profil laufen heißt ohne Zugang in die Neustartschleife, und die CI schlägt
-darauf an.
+Alle übrigen sind eins zu eins: `plex`, `sonarr`, `radarr`, `lidarr`,
+`prowlarr`, `bazarr`, `navidrome`, `audiobookshelf`, `overseerr`, `tautulli`,
+`homepage`, `uptime`, `cleanuparr`, `unpackerr`, `recyclarr`, `backfill`,
+`usenet`, `radio`, `kometa`, `scrutiny`.
+
+Neuer Dienst: **immer ein eigenes Profil und ein Eintrag im `CATALOG` von
+`setup.sh`**, sonst lässt er sich nicht abwählen. Die CI schlägt an, wenn ein
+Dienst ohne Profil auftaucht — dann liefe er an der Auswahl vorbei.
+Zugangsabhängige Dienste bleiben zusätzlich aus, solange der Zugang fehlt:
+ohne Profil laufen hieße ohne Zugang in die Neustartschleife.
 
 ## setup.sh
 
-Rund 1500 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
+Rund 1700 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
+
+- **Ganz vorne steht die Auswahl.** Vor Schritt 1 zeigt `choose` eine Liste
+  aller Dienste und Optionen, alles angekreuzt, Nummern schalten um. Die
+  Tabelle dafür ist `CATALOG` (Schlüssel, Gruppe, Name, Beschreibung, Profil,
+  Kachel), abgefragt wird sie überall mit `want <schlüssel>`. Kometa und
+  Scrutiny sind bewusst vorab abgewählt, sie brauchen Handarbeit und liefen
+  sonst in eine Neustartschleife. Beim zweiten Lauf spiegelt die Vorauswahl
+  den Ist-Zustand, damit ein erneuter Start nichts wieder anschaltet, das
+  bewusst weg sollte.
+- Daraus folgt: **keine „willst du X?"-Fragen mehr** in den Schritten. Wer
+  ausgewählt hat, wird nur noch nach dem gefragt, was von außen kommt —
+  Schlüssel, Zugangsdaten, Domain.
 
 - `set -uo pipefail`, **`set -e` ist mit Absicht nicht gesetzt**: ein
   fehlgeschlagener optionaler Schritt darf die Installation nicht abbrechen.

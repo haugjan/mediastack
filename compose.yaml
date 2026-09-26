@@ -15,6 +15,13 @@
 #   3. /data ist EIN gemeinsamer Mount. Nur so kann hardlinken statt kopieren.
 #      Paperless hat seinen eigenen Baum unter ${PAPERLESS_ROOT}.
 #
+# JEDER Dienst haengt an einem eigenen Profil, und COMPOSE_PROFILES in der
+# .env zaehlt auf, was laufen soll. Ohne Profile startet also nichts - das
+# ist Absicht: setup.sh fragt am Anfang ab, was man will, und schreibt genau
+# diese Liste. Zusammengehoerendes teilt sich ein Profil (torrent = gluetun
+# und qBittorrent, docs = Paperless mit Datenbank, Cache und den beiden
+# Konvertern), weil es einzeln nicht lauffaehig waere.
+#
 # Installation:  sudo ./setup.sh
 ################################################################################
 
@@ -111,6 +118,7 @@ services:
     <<: *base
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
+    profiles: [prowlarr]
     environment: *env
     volumes:
       - ./config/prowlarr:/config
@@ -122,6 +130,7 @@ services:
     <<: *base
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
+    profiles: [sonarr]
     environment: *env
     volumes:
       - ./config/sonarr:/config
@@ -133,6 +142,7 @@ services:
     <<: *base
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
+    profiles: [radarr]
     environment: *env
     volumes:
       - ./config/radarr:/config
@@ -150,6 +160,7 @@ services:
     <<: *base
     image: lscr.io/linuxserver/lidarr:develop
     container_name: lidarr
+    profiles: [lidarr]
     environment:
       <<: *env
       DOCKER_MODS: linuxserver/mods:universal-package-install
@@ -164,6 +175,7 @@ services:
     <<: *base
     image: lscr.io/linuxserver/bazarr:latest
     container_name: bazarr
+    profiles: [bazarr]
     environment: *env
     volumes:
       - ./config/bazarr:/config
@@ -179,6 +191,7 @@ services:
     restart: unless-stopped
     image: lscr.io/linuxserver/plex:latest
     container_name: plex
+    profiles: [plex]
     network_mode: host
     environment:
       <<: *env
@@ -200,6 +213,7 @@ services:
     <<: *base
     image: deluan/navidrome:latest
     container_name: navidrome
+    profiles: [navidrome]
     user: ${PUID}:${PGID}
     environment:
       ND_MUSICFOLDER: /music
@@ -221,6 +235,7 @@ services:
     <<: *base
     image: ghcr.io/advplyr/audiobookshelf:latest
     container_name: audiobookshelf
+    profiles: [audiobookshelf]
     environment:
       TZ: ${TZ}
     volumes:
@@ -236,6 +251,7 @@ services:
     <<: *base
     image: lscr.io/linuxserver/overseerr:latest
     container_name: overseerr
+    profiles: [overseerr]
     environment: *env
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -355,6 +371,7 @@ services:
     <<: *base
     image: ghcr.io/recyclarr/recyclarr:8
     container_name: recyclarr
+    profiles: [recyclarr]
     user: ${PUID}:${PGID}
     environment:
       TZ: ${TZ}
@@ -368,6 +385,7 @@ services:
     <<: *base
     image: ghcr.io/cleanuparr/cleanuparr:latest
     container_name: cleanuparr
+    profiles: [cleanuparr]
     environment:
       TZ: ${TZ}
       PORT: 11011
@@ -380,6 +398,7 @@ services:
     <<: *base
     image: ghcr.io/unpackerr/unpackerr:latest
     container_name: unpackerr
+    profiles: [unpackerr]
     user: ${PUID}:${PGID}
     environment:
       TZ: ${TZ}
@@ -400,6 +419,7 @@ services:
     <<: *base
     image: python:3.13-alpine
     container_name: backfill
+    profiles: [backfill]
     command: ["python", "-u", "/app/backfill.py"]
     environment:
       TZ: ${TZ}
@@ -456,6 +476,7 @@ services:
     <<: *base
     image: lscr.io/linuxserver/tautulli:latest
     container_name: tautulli
+    profiles: [tautulli]
     environment: *env
     extra_hosts:
       - host.docker.internal:host-gateway
@@ -468,7 +489,7 @@ services:
     <<: *base
     image: kometateam/kometa:latest
     container_name: kometa
-    profiles: [extras]
+    profiles: [kometa]
     environment:
       TZ: ${TZ}
       KOMETA_RUN: "false"
@@ -484,6 +505,7 @@ services:
     <<: *base
     image: ghcr.io/gethomepage/homepage:latest
     container_name: homepage
+    profiles: [homepage]
     environment:
       <<: *env
       HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
@@ -507,18 +529,19 @@ services:
     <<: *base
     image: louislam/uptime-kuma:1
     container_name: uptime-kuma
+    profiles: [uptime]
     volumes:
       - ./config/uptime-kuma:/app/data
     ports:
       - 3001:3001
 
   # Die devices-Liste muss zu "lsblk -d" passen, sonst startet der Container
-  # nicht. Deshalb steckt es im Profil extras und laeuft nicht automatisch.
+  # nicht. Deshalb ist es im Installer standardmaessig abgewaehlt.
   scrutiny:
     <<: *base
     image: ghcr.io/analogj/scrutiny:master-omnibus
     container_name: scrutiny
-    profiles: [extras]
+    profiles: [scrutiny]
     cap_add: [SYS_RAWIO]
     volumes:
       - ./config/scrutiny/config:/opt/scrutiny/config

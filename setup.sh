@@ -217,6 +217,126 @@ else
 fi
 
 # =========================================================================
+# Auswahl: was soll ueberhaupt laufen
+# =========================================================================
+# Alles ist vorausgewaehlt, abgewaehlt wird durch Umschalten. Beim zweiten
+# Lauf steht da, was gerade laeuft: ein erneuter Start soll nichts wieder
+# anschalten, das beim ersten Mal bewusst weg sollte.
+#
+# Zwei Ausnahmen sind absichtlich vorab abgewaehlt, weil sie ohne Handarbeit
+# in eine Neustartschleife laufen wuerden: Kometa braucht eine eigene
+# config.yml, Scrutiny eine devices-Liste, die zu "lsblk -d" passt.
+#
+# Spalten: Schluessel | Gruppe | Name | Beschreibung | Compose-Profil | Kachel
+# Ein leeres Profil heisst: kein Container, sondern eine Einstellung.
+CATALOG=(
+"plex|dienst|Plex|Filme und Serien, auch von unterwegs|plex|plex"
+"sonarr|dienst|Serien|Sonarr: was fehlt, welche Qualitaet|sonarr|sonarr"
+"radarr|dienst|Filme|Radarr: dasselbe fuer Filme|radarr|radarr"
+"lidarr|dienst|Musik|Lidarr: Alben nachfuehren|lidarr|lidarr"
+"prowlarr|dienst|Suchquellen|Prowlarr: verteilt die Indexer an alle Apps|prowlarr|prowlarr"
+"bazarr|dienst|Untertitel|Bazarr: Deutsch vor Englisch|bazarr|bazarr"
+"navidrome|dienst|Musikserver|Navidrome: Subsonic-API fuers Handy und Auto|navidrome|navidrome"
+"audiobookshelf|dienst|Hoerbuecher|Audiobookshelf: Hoerbuecher und E-Books|audiobookshelf|audiobookshelf"
+"overseerr|dienst|Wunschliste|Overseerr: Wuensche von Familie und Freunden|overseerr|overseerr"
+"tautulli|dienst|Plex-Statistik|Tautulli: wer schaut was, wie oft|tautulli|tautulli"
+"homepage|dienst|Startseite|Homepage: Dashboard mit Live-Status|homepage|homepage"
+"uptime|dienst|Ueberwachung|Uptime Kuma: laeuft noch alles|uptime|uptime"
+"cleanuparr|dienst|Aufraeumen|Cleanuparr: raeumt haengende Downloads weg|cleanuparr|cleanuparr"
+"unpackerr|dienst|Entpacken|Unpackerr: packt fertige Downloads aus|unpackerr|"
+"recyclarr|dienst|Qualitaetsprofile|Recyclarr: deutsche TRaSH-Profile|recyclarr|"
+"backfill|dienst|Nachsuche|gedrosselte Suche nach fehlenden Titeln|backfill|"
+"torrent|dienst|Torrents|qBittorrent im VPN-Tunnel (braucht ProtonVPN)|torrent|qbittorrent"
+"usenet|dienst|Usenet|SABnzbd (braucht ein Abo)|usenet|sabnzbd"
+"docs|dienst|Dokumentenarchiv|Paperless mit OCR auf Deutsch|docs|paperless"
+"radio|dienst|Radiomitschnitt|Aircheckarr: schneidet Wunschtitel aus Webradios|radio|aircheckarr"
+"kometa|dienst|Poster und Sammlungen|Kometa (braucht eine eigene config.yml)|kometa|"
+"scrutiny|dienst|Festplattenzustand|Scrutiny (braucht eine passende devices-Liste)|scrutiny|scrutiny"
+"tailscale|option|Zugriff von unterwegs|Tailscale, ohne offenen Port am Router||"
+"domain|option|Eigene Web-Adressen|schoene Namen mit Zertifikat, ueber Azure DNS|proxy|"
+"youtube|option|Musik ueber YouTube|Lidarr-Plugin Tubifarry, braucht Spotify-Zugang||"
+"onedrive|option|OneDrive anbinden|Scans rein, Archiv und Sicherung raus||"
+"backup|option|Naechtliche Vollsicherung|config/ verschluesselt nach OneDrive||"
+)
+
+declare -A WANT NAME_OF DESC_OF PROF_OF TILE_OF GRP_OF
+ORDER=()
+for row in "${CATALOG[@]}"; do
+	IFS='|' read -r k g n d pr ti <<<"$row"
+	ORDER+=("$k")
+	GRP_OF[$k]="$g"; NAME_OF[$k]="$n"; DESC_OF[$k]="$d"
+	PROF_OF[$k]="$pr"; TILE_OF[$k]="$ti"
+	WANT[$k]=1
+done
+WANT[kometa]=0
+WANT[scrutiny]=0
+
+want() { [[ ${WANT[$1]:-0} == 1 ]]; }
+
+# Beim zweiten Lauf spiegelt die Vorauswahl den Ist-Zustand. Dienste stehen
+# in COMPOSE_PROFILES, die Einstellungen erkennt man an ihren Spuren.
+if (( ! FIRST_RUN )); then
+	PROF_NOW=",$(env_get COMPOSE_PROFILES 2>/dev/null || true),"
+	for k in "${ORDER[@]}"; do
+		[[ -n ${PROF_OF[$k]} ]] || continue
+		if [[ $PROF_NOW == *",${PROF_OF[$k]},"* ]]; then WANT[$k]=1; else WANT[$k]=0; fi
+	done
+	[[ -n $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]] || WANT[youtube]=0
+	[[ -f /etc/rclone/rclone.conf ]] || WANT[onedrive]=0
+	systemctl is-enabled mediastack-backup.timer >/dev/null 2>&1 || WANT[backup]=0
+	command -v tailscale >/dev/null 2>&1 || WANT[tailscale]=0
+fi
+
+show_choice() {
+	local i=0 k mark grp=""
+	echo
+	printf '%sWas soll laufen?%s\n' "$B" "$N"
+	printf '%sAlles Angekreuzte wird eingerichtet. Zum Abwaehlen die Nummer eintippen.%s\n' "$D" "$N"
+	for k in "${ORDER[@]}"; do
+		i=$((i + 1))
+		if [[ ${GRP_OF[$k]} != "$grp" ]]; then
+			grp="${GRP_OF[$k]}"
+			[[ $grp == dienst ]] && printf '\n  %sDienste%s\n' "$B" "$N" \
+			                     || printf '\n  %sOptionen%s\n' "$B" "$N"
+		fi
+		if want "$k"; then mark="$G[x]$N"; else mark="$D[ ]$N"; fi
+		printf '  %2d %b %-20s %s%s%s\n' "$i" "$mark" "${NAME_OF[$k]}" "$D" "${DESC_OF[$k]}" "$N"
+	done
+}
+
+choose() {
+	local line num k
+	while :; do
+		show_choice
+		echo
+		printf '  Nummern zum Umschalten, mehrere mit Komma. Enter = so lassen: '
+		read -r line </dev/tty || line=""
+		[[ -z ${line// /} ]] && break
+		for num in ${line//,/ }; do
+			[[ $num =~ ^[0-9]+$ ]] || continue
+			(( num >= 1 && num <= ${#ORDER[@]} )) || continue
+			k="${ORDER[num - 1]}"
+			if want "$k"; then WANT[$k]=0; else WANT[$k]=1; fi
+		done
+	done
+	# Was voneinander abhaengt, darf nicht halb ausgewaehlt sein.
+	echo
+	if want backup && ! want onedrive; then
+		note "Die Vollsicherung braucht OneDrive, deshalb ist sie wieder aus."
+		WANT[backup]=0
+	fi
+	if want youtube && ! want lidarr; then
+		note "Musik ueber YouTube braucht Lidarr, deshalb ist es wieder aus."
+		WANT[youtube]=0
+	fi
+	local n=0
+	for k in "${ORDER[@]}"; do want "$k" && n=$((n + 1)); done
+	ok "$n von ${#ORDER[@]} ausgewaehlt"
+}
+
+choose
+
+# =========================================================================
 # 1. System pruefen und Fehlendes nachinstallieren
 # =========================================================================
 step "1/9  System pruefen"
@@ -423,14 +543,17 @@ ok "Konfigurationsordner vorbereitet"
 # =========================================================================
 step "4/9  Zugriff von unterwegs"
 
-echo "  Tailscale ist ein kostenloses privates Netz zwischen deinen Geraeten."
-echo "  Damit erreichst du alles sicher von unterwegs, ohne am Router etwas"
-echo "  zu oeffnen. Sehr empfohlen."
 TS_IP="$(env_get TAILSCALE_IP 2>/dev/null || true)"
-if command -v tailscale >/dev/null 2>&1 && [[ -n $(tailscale ip -4 2>/dev/null) ]]; then
+if ! want tailscale; then
+	info "Abgewaehlt. Ohne Tailscale bleibt der Zugriff auf das Heimnetz beschraenkt."
+	TS_IP=""
+elif command -v tailscale >/dev/null 2>&1 && [[ -n $(tailscale ip -4 2>/dev/null) ]]; then
 	TS_IP="$(tailscale ip -4 | head -1)"
 	ok "Tailscale ist schon verbunden ($TS_IP)"
-elif ask_yn "Tailscale jetzt einrichten?" j; then
+else
+	echo "  Tailscale ist ein kostenloses privates Netz zwischen deinen Geraeten."
+	echo "  Damit erreichst du alles sicher von unterwegs, ohne am Router etwas"
+	echo "  zu oeffnen."
 	command -v tailscale >/dev/null 2>&1 || \
 		try "Tailscale installieren" bash -c 'curl -fsSL https://tailscale.com/install.sh | sh'
 	if command -v tailscale >/dev/null 2>&1; then
@@ -440,8 +563,6 @@ elif ask_yn "Tailscale jetzt einrichten?" j; then
 		TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
 		[[ -n $TS_IP ]] && ok "Verbunden als $TS_IP"
 	fi
-else
-	info "Uebersprungen. Spaeter: sudo tailscale up --ssh && sudo ./setup.sh"
 fi
 
 LAN_IP="$(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)"
@@ -706,35 +827,30 @@ if [[ -n $BASE_DOMAIN ]] && ! azure_env_valid \
 	info "Am einfachsten: gleich die automatische Einrichtung waehlen."
 fi
 
-if azure_env_valid && [[ -n $BASE_DOMAIN ]]; then
+if ! want domain; then
+	info "Abgewaehlt. Du erreichst alles ueber http://${LAN_IP:-<ip>}:8989 und aehnlich."
+elif azure_env_valid && [[ -n $BASE_DOMAIN ]]; then
 	USE_PROXY=1
 	ok "Schon eingerichtet fuer $BASE_DOMAIN"
 	if ask_yn "DNS-Eintraege neu setzen? (etwa weil sich deine Internet-Adresse geaendert hat)" n; then
 		azure_dns_setup || note "Nicht geaendert, die bisherigen Werte bleiben."
 	fi
 else
-	echo "  Ohne diesen Schritt erreichst du alles unter http://$LAN_IP:8989 und"
-	echo "  aehnlich. Das funktioniert einwandfrei, sieht nur nicht schoen aus."
-	echo
-	echo "  Mit eigener Domain bekommst du https://paperless.deine-domain.ch mit"
-	echo "  echtem, browservertrautem Zertifikat, und trotzdem ist nichts davon"
-	echo "  aus dem Internet erreichbar: die Namen zeigen auf deine private"
+	echo "  Du bekommst https://paperless.deine-domain.ch mit echtem,"
+	echo "  browservertrautem Zertifikat, und trotzdem ist nichts davon aus dem"
+	echo "  Internet erreichbar: die Namen zeigen auf deine private"
 	echo "  Tailscale-Adresse. Ich richte Zone, Zugang und Eintraege selbst ein."
 	echo "  Voraussetzung ist eine Domain, deren DNS-Zone bei Azure liegt."
 	echo
 	if [[ -z $TS_IP ]]; then
 		note "Tailscale ist nicht verbunden, und das ist hierfuer Voraussetzung."
 		info "Spaeter: sudo tailscale up --ssh, dann sudo ./setup.sh erneut."
-	elif ask_yn "Domain jetzt automatisch einrichten?" n; then
-		if azure_dns_setup; then
-			USE_PROXY=1
-			ok "Adressen eingerichtet"
-		else
-			note "Uebersprungen. Der Stack laeuft trotzdem, ueber IP und Portnummer."
-			BASE_DOMAIN=""
-		fi
+	elif azure_dns_setup; then
+		USE_PROXY=1
+		ok "Adressen eingerichtet"
 	else
-		info "Uebersprungen. Du nutzt Adressen mit IP und Portnummer."
+		note "Nicht eingerichtet. Der Stack laeuft trotzdem, ueber IP und Portnummer."
+		BASE_DOMAIN=""
 	fi
 fi
 
@@ -743,38 +859,37 @@ fi
 # =========================================================================
 step "6/9  Downloads"
 
+# Ausgewaehlt heisst gewollt, gefragt wird nur noch nach dem, was von aussen
+# kommt. Fehlt der Zugang, bleibt der Dienst trotzdem aus: lieber gar nicht
+# gestartet als in einer Neustartschleife.
 USE_TORRENT=0; USE_USENET=0
-if [[ -n $(env_get PROTON_WG_PRIVATE_KEY 2>/dev/null || true) ]]; then
+if ! want torrent; then
+	info "Torrents abgewaehlt."
+elif [[ -n $(env_get PROTON_WG_PRIVATE_KEY 2>/dev/null || true) ]]; then
 	USE_TORRENT=1; ok "Torrents sind schon eingerichtet"
 else
 	echo "  Fuer Torrents braucht es ein VPN, sonst ist deine Adresse oeffentlich"
 	echo "  sichtbar. Eingerichtet ist ProtonVPN (ca. 4 bis 5 EUR pro Monat)."
 	echo "  Den Schluessel findest du dort unter Downloads, WireGuard-Konfiguration."
 	echo "  Wichtig: beim Erzeugen NAT-PMP und P2P aktivieren."
-	if ask_yn "ProtonVPN-Schluessel jetzt eingeben?" n; then
-		k="$(ask_secret "WireGuard PrivateKey")"
-		if [[ -n $k ]]; then
-			env_set PROTON_WG_PRIVATE_KEY "$k"
-			env_set VPN_COUNTRIES "$(ask 'Land fuer den VPN-Server' "$(env_get VPN_COUNTRIES || echo Switzerland)")"
-			USE_TORRENT=1; ok "Torrents werden eingerichtet"
-		fi
+	k="$(ask_secret "WireGuard PrivateKey (leer = spaeter)")"
+	if [[ -n $k ]]; then
+		env_set PROTON_WG_PRIVATE_KEY "$k"
+		env_set VPN_COUNTRIES "$(ask 'Land fuer den VPN-Server' "$(env_get VPN_COUNTRIES || echo Switzerland)")"
+		USE_TORRENT=1; ok "Torrents werden eingerichtet"
 	else
-		info "Uebersprungen. Ohne VPN werden keine Torrents gestartet, das ist Absicht."
+		note "Ohne Schluessel bleibt qBittorrent aus. Nachholen: sudo ./setup.sh"
 	fi
 fi
 
-if [[ -n $(env_get SABNZBD_API_KEY 2>/dev/null || true) ]] \
-	|| [[ ${COMPOSE_PROFILES_OLD:-} == *usenet* ]]; then
+if ! want usenet; then
+	info "Usenet abgewaehlt."
+else
 	USE_USENET=1
-fi
-if (( ! USE_USENET )); then
-	echo
-	echo "  Usenet ist schneller als Torrents und braucht kein VPN, kostet aber"
-	echo "  ein Abo bei einem Anbieter plus einen Suchdienst."
-	if ask_yn "Usenet mitstarten? (Zugangsdaten traegst du danach im Browser ein)" n; then
-		USE_USENET=1; ok "Usenet wird mitgestartet"
+	if [[ -n $(env_get SABNZBD_API_KEY 2>/dev/null || true) ]]; then
+		ok "Usenet ist schon eingerichtet"
 	else
-		info "Uebersprungen."
+		ok "Usenet wird mitgestartet (Zugangsdaten traegst du danach im Browser ein)"
 	fi
 fi
 
@@ -784,7 +899,9 @@ fi
 # erst danach bei YouTube. Ohne eigene Zugangsdaten antwortet Spotify mit
 # 403, der Indexer liefert null Treffer, und in Lidarr sieht das aus, als
 # gaebe es das Album nirgends.
-if [[ -n $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]]; then
+if ! want youtube; then
+	info "Musik ueber YouTube abgewaehlt."
+elif [[ -n $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]]; then
 	ok "Musik ueber YouTube ist schon eingerichtet"
 else
 	echo
@@ -797,18 +914,15 @@ else
 	echo "    Redirect URI: http://127.0.0.1:8686/callback , API: Web API"
 	echo "    (die IP, nicht localhost: das lehnt Spotify als unsicher ab)"
 	echo
-	if ask_yn "Spotify-Zugangsdaten jetzt eintragen?" n; then
-		sid="$(ask 'Client ID')"
-		ssec="$(ask_secret 'Client Secret')"
-		if [[ -n $sid && -n $ssec ]]; then
-			env_set SPOTIFY_CLIENT_ID "$sid"
-			env_set SPOTIFY_CLIENT_SECRET "$ssec"
-			ok "Musik ueber YouTube wird eingerichtet"
-		else
-			note "Leer gelassen, uebersprungen."
-		fi
+	sid="$(ask 'Client ID (leer = spaeter)')"
+	ssec=""
+	[[ -n $sid ]] && ssec="$(ask_secret 'Client Secret')"
+	if [[ -n $sid && -n $ssec ]]; then
+		env_set SPOTIFY_CLIENT_ID "$sid"
+		env_set SPOTIFY_CLIENT_SECRET "$ssec"
+		ok "Musik ueber YouTube wird eingerichtet"
 	else
-		info "Uebersprungen. Musik laeuft dann nur ueber die Suchquellen in Prowlarr."
+		note "Ohne Zugang bleibt Tubifarry aus. Nachholen: sudo ./setup.sh"
 	fi
 fi
 
@@ -846,10 +960,45 @@ rclone_live() { rclone_user lsd -- "$1:" >>"$LOG" 2>&1; }
 
 # Bricht die Anmeldung nach dem Browser ab, etwa weil rclone kein Laufwerk
 # auswaehlen kann, bleibt ein Remote ohne drive_id stehen. Das sieht aus wie
-# eine abgelaufene Anmeldung, laesst sich aber nicht erneuern, nur neu anlegen.
+# eine abgelaufene Anmeldung, ein "reconnect" hilft aber nicht.
 rclone_half() {
 	rclone_has "$1" || return 1
 	! rclone_user config show "$1" 2>/dev/null | grep -q '^drive_id = .'
+}
+
+# Das Laufwerk selbst eintragen, statt rclone waehlen zu lassen. rclone fragt
+# alle Laufwerke ab, die Microsoft zum Konto listet, und dazu gehoeren bei
+# manchen Konten versteckte Systemlaufwerke ("b!...", "Bundles_...",
+# "ODCMetadataArchive"). Die antworten mit "ObjectHandle is Invalid", und die
+# Auswahl geht dabei unter. /me/drive dagegen nennt immer genau das eine
+# OneDrive, das man im Browser sieht. Braucht ein noch gueltiges Token, also
+# kurz nach der Anmeldung. Die Konfiguration kommt ueber die Umgebung statt
+# als Argument, damit das Token nicht in der Prozessliste steht.
+rclone_pick_drive() {
+	local remote="$1" drive
+	drive="$(RCLONE_DUMP="$(rclone_user config dump 2>/dev/null)" \
+		python3 - "$remote" 2>>"$LOG" <<'PY'
+import json, os, sys, urllib.request
+remote = sys.argv[1]
+try:
+    token = json.loads(json.loads(os.environ["RCLONE_DUMP"])[remote]["token"])["access_token"]
+    req = urllib.request.Request(
+        "https://graph.microsoft.com/v1.0/me/drive?$select=id,driveType",
+        headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        d = json.load(r)
+    print(d["id"], d["driveType"])
+except Exception as e:
+    print("OneDrive-Laufwerk nicht ermittelt:", e, file=sys.stderr)
+    sys.exit(1)
+PY
+	)" || return 1
+	[[ $drive == *" "* ]] || return 1
+	# config_refresh_token=false, sonst startet rclone die Anmeldung von vorn.
+	rclone_user config update "$remote" \
+		drive_id="${drive% *}" drive_type="${drive#* }" \
+		config_refresh_token=false --non-interactive >>"$LOG" 2>&1 || return 1
+	rclone_live "$remote"
 }
 
 rclone_install() {
@@ -902,6 +1051,10 @@ rclone_connect() {
 	    Region     global
 	    Laufwerk   das angebotene bestaetigen
 
+	  Meldungen wie "Failed to query root for drive ... ObjectHandle is
+	  Invalid" sind harmlos: das sind versteckte Systemlaufwerke von
+	  Microsoft. Das richtige Laufwerk traegt das Skript danach selbst ein.
+
 	  Zur Anmeldung oeffnet sich der Browser. Passiert nichts, steht im Text
 	  darunter eine Adresse mit 127.0.0.1:53682, die kopierst du in einen
 	  Browser auf diesem Rechner.
@@ -909,6 +1062,7 @@ rclone_connect() {
 	EOF
 	rclone_user config create "$remote" onedrive </dev/tty >/dev/tty 2>&1
 	rclone_live "$remote" && return 0
+	rclone_half "$remote" && rclone_pick_drive "$remote" && return 0
 	# "config create" stellt nur die Fragen des Backends. Aendert rclone daran
 	# etwas, oder bricht die Anmeldung ab, uebernimmt der vollstaendige
 	# Assistent. Der ist umstaendlicher, aber seit Jahren unveraendert.
@@ -918,6 +1072,7 @@ rclone_connect() {
 	info "danach q zum Beenden."
 	rclone_user config </dev/tty >/dev/tty 2>&1
 	rclone_live "$remote" && return 0
+	rclone_half "$remote" && rclone_pick_drive "$remote" && return 0
 	# Nichts Halbes stehen lassen, sonst haelt der naechste Lauf es fuer eine
 	# abgelaufene Anmeldung.
 	rclone_user config delete "$remote" >>"$LOG" 2>&1
@@ -955,7 +1110,9 @@ onedrive_setup() {
 	remote="$(env_get RCLONE_REMOTE)"; crypt="$(env_get RCLONE_REMOTE_CRYPT)"
 	inbox="$(env_get RCLONE_INBOX_PATH)"
 
-	if rclone_half "$remote"; then
+	# Halb eingerichtet: erst das Laufwerk nachtragen. Ist das Token dafuer
+	# schon abgelaufen, bleibt nur die neue Anmeldung.
+	if rclone_half "$remote" && ! rclone_pick_drive "$remote"; then
 		note "$remote ist nur halb eingerichtet, die Anmeldung wird wiederholt."
 		rclone_user config delete "$remote" >>"$LOG" 2>&1
 	fi
@@ -998,19 +1155,11 @@ onedrive_setup() {
 }
 
 USE_RADIO=0
-if [[ ${COMPOSE_PROFILES_OLD:-} == *radio* ]]; then
-	USE_RADIO=1; ok "Radiomitschnitt ist schon eingerichtet"
-else
+if want radio; then
+	USE_RADIO=1
 	echo
-	echo "  Aircheckarr schneidet gewuenschte Titel aus Webradios mit: du"
-	echo "  traegst ein, was dir fehlt, und sobald es irgendwo laeuft, liegt"
-	echo "  es danach in der Bibliothek. Braucht kein Abo und keinen Zugang."
-	echo "  Die Qualitaet liegt bei 128 bis 320 kbit/s, je nach Sender."
-	if ask_yn "Radiomitschnitt einrichten? (Bau dauert einige Minuten)" n; then
-		USE_RADIO=1; ok "Radiomitschnitt wird eingerichtet"
-	else
-		info "Uebersprungen."
-	fi
+	info "Aircheckarr schneidet Wunschtitel aus Webradios mit. Der Bau des"
+	info "Containers dauert gleich einige Minuten."
 fi
 
 # =========================================================================
@@ -1019,21 +1168,17 @@ fi
 step "7/9  Dokumente und OneDrive (optional)"
 
 USE_DOCS=0
-if [[ -n $(env_get PAPERLESS_SECRET_KEY 2>/dev/null || true) ]]; then
+if ! want docs; then
+	info "Dokumentenarchiv abgewaehlt."
+elif [[ -n $(env_get PAPERLESS_SECRET_KEY 2>/dev/null || true) ]]; then
 	USE_DOCS=1; ok "Paperless ist schon eingerichtet"
 else
-	echo "  Paperless durchsucht eingescannte Briefe und Rechnungen im Volltext,"
-	echo "  auf Deutsch. Braucht etwa 2 GB RAM und keine externen Zugaenge."
-	if ask_yn "Paperless einrichten?" j; then
-		env_set PAPERLESS_SECRET_KEY "$(gen_secret 64)"
-		env_set PAPERLESS_DB_PASSWORD "$(gen_secret 32)"
-		env_set PAPERLESS_ADMIN_USER "$(ask 'Benutzername fuer Paperless' "${ADMIN_USER}")"
-		PW="$(gen_secret 20)"; env_set PAPERLESS_ADMIN_PASSWORD "$PW"
-		USE_DOCS=1
-		ok "Eingerichtet, Passwort steht am Ende in der Uebersicht"
-	else
-		info "Uebersprungen."
-	fi
+	env_set PAPERLESS_SECRET_KEY "$(gen_secret 64)"
+	env_set PAPERLESS_DB_PASSWORD "$(gen_secret 32)"
+	env_set PAPERLESS_ADMIN_USER "$(ask 'Benutzername fuer Paperless' "${ADMIN_USER}")"
+	PW="$(gen_secret 20)"; env_set PAPERLESS_ADMIN_PASSWORD "$PW"
+	USE_DOCS=1
+	ok "Eingerichtet, Passwort steht am Ende in der Uebersicht"
 fi
 
 # --------------------------------------------------------------- OneDrive
@@ -1044,7 +1189,9 @@ fi
 USE_ONEDRIVE=0
 USE_BACKUP=0
 RC_NAME="$(env_get RCLONE_REMOTE 2>/dev/null || true)"; RC_NAME="${RC_NAME:-onedrive}"
-if [[ -f $RCLONE_SYS_CONF ]] && grep -q "^\[$RC_NAME\]" "$RCLONE_SYS_CONF" 2>/dev/null; then
+if ! want onedrive; then
+	info "OneDrive abgewaehlt. Ohne sie bleiben Scan-Eingang, Spiegel und Sicherung aus."
+elif [[ -f $RCLONE_SYS_CONF ]] && grep -q "^\[$RC_NAME\]" "$RCLONE_SYS_CONF" 2>/dev/null; then
 	# Nicht blind uebernehmen: ein abgelaufenes Token sieht in der Datei
 	# genauso aus wie ein gueltiges. onedrive_setup prueft es nach und legt
 	# nebenbei an, was seit dem letzten Lauf fehlt.
@@ -1057,23 +1204,16 @@ else
 	echo "  Und config/ wird verschluesselt gesichert, also Plex-Fortschritt,"
 	echo "  Qualitaetsprofile und die Paperless-Datenbank."
 	echo "  Dafuer brauchst du ein Microsoft-Konto und einen Browser."
-	if ask_yn "OneDrive jetzt einrichten?" j; then
-		onedrive_setup && USE_ONEDRIVE=1
-	else
-		info "Uebersprungen. Spaeter: sudo ./setup.sh erneut starten."
-	fi
+	onedrive_setup && USE_ONEDRIVE=1
 fi
 
-if (( USE_ONEDRIVE )); then
+if (( USE_ONEDRIVE )) && want backup; then
+	USE_BACKUP=1
 	if systemctl is-enabled mediastack-backup.timer >/dev/null 2>&1; then
-		USE_BACKUP=1
 		info "Naechtliche Vollsicherung ist schon eingeschaltet"
 	else
-		echo
-		echo "  Die naechtliche Vollsicherung packt config/ und .env verschluesselt"
-		echo "  nach OneDrive. Sie haelt dafuer um 04:30 fuer ein paar Minuten alle"
-		echo "  Container an, sonst erwischt sie die Datenbanken mitten im Schreiben."
-		ask_yn "Naechtliche Vollsicherung einschalten?" j && USE_BACKUP=1
+		info "Vollsicherung um 04:30. Sie haelt dafuer die Container ein paar"
+		info "Minuten an, sonst erwischt sie die Datenbanken beim Schreiben."
 	fi
 fi
 
@@ -1082,7 +1222,9 @@ fi
 # =========================================================================
 step "8/9  Plex"
 
-if [[ -z $(env_get PLEX_CLAIM 2>/dev/null || true) ]] \
+if ! want plex; then
+	info "Abgewaehlt."
+elif [[ -z $(env_get PLEX_CLAIM 2>/dev/null || true) ]] \
 	&& [[ ! -f $REPO_DIR/config/plex/Library/Application\ Support/Plex\ Media\ Server/Preferences.xml ]]; then
 	echo "  Damit Plex sofort mit deinem Konto verbunden ist, brauchst du einen"
 	echo "  Code von https://www.plex.tv/claim/ . Er gilt nur 4 Minuten."
@@ -1121,14 +1263,25 @@ env_set LAN_IP "${LAN_IP:-127.0.0.1}"
 # bleiben und ein spaeteres Nachruesten nichts mehr zu raten hat.
 rclone_defaults
 
-# Profile bestimmen, welche Container ueberhaupt starten. Fehlt ein Zugang,
-# laeuft der Dienst gar nicht, statt endlos neu zu starten.
-PROFILES=()
-(( USE_TORRENT )) && PROFILES+=(torrent)
-(( USE_USENET ))  && PROFILES+=(usenet)
-(( USE_DOCS ))    && PROFILES+=(docs)
-(( USE_RADIO ))   && PROFILES+=(radio)
-(( USE_PROXY ))   && PROFILES+=(proxy)
+# Profile bestimmen, welche Container ueberhaupt starten. Jeder Dienst hat
+# sein eigenes, die Liste ist also genau die Auswahl vom Anfang. Zwei Dinge
+# koennen einen ausgewaehlten Dienst trotzdem draussen lassen: ein fehlender
+# Zugang (dann liefe er in einer Neustartschleife) und eine Abhaengigkeit,
+# die nicht steht.
+PROFILES=(); ACTIVE=()
+for k in "${ORDER[@]}"; do
+	want "$k" || continue
+	[[ -n ${PROF_OF[$k]} ]] || continue
+	case $k in
+		torrent) (( USE_TORRENT )) || { note "qBittorrent bleibt aus: kein VPN-Schluessel"; continue; } ;;
+		usenet)  (( USE_USENET ))  || continue ;;
+		docs)    (( USE_DOCS ))    || continue ;;
+		domain)  (( USE_PROXY ))   || { note "Caddy bleibt aus: keine Domain eingerichtet"; continue; } ;;
+		radio)   (( USE_RADIO ))   || continue ;;
+	esac
+	PROFILES+=("${PROF_OF[$k]}")
+	ACTIVE+=("$k")
+done
 PROF_STR="$(IFS=,; echo "${PROFILES[*]}")"
 env_set COMPOSE_PROFILES "$PROF_STR"
 ok "Aktive Bereiche: ${PROF_STR:-nur Grundausstattung}"
@@ -1153,11 +1306,22 @@ url_for() {
 }
 # Dienste, die nicht laufen, bekommen keine Kachel. Sonst zeigt die
 # Startseite fuer sie dauerhaft "API Error".
+# Dienste ohne Kachel gibt es nicht, und abgewaehlte sollen keine bekommen:
+# eine Kachel auf einen toten Port zeigt dauerhaft "API Error".
 INACTIVE=()
-(( USE_TORRENT )) || INACTIVE+=(qbittorrent)
-(( USE_USENET ))  || INACTIVE+=(sabnzbd)
-(( USE_DOCS ))    || INACTIVE+=(paperless)
-(( USE_RADIO ))   || INACTIVE+=(aircheckarr)
+for k in "${ORDER[@]}"; do
+	[[ -n ${TILE_OF[$k]} ]] || continue
+	if want "$k"; then
+		case $k in
+			torrent) (( USE_TORRENT )) || INACTIVE+=(qbittorrent) ;;
+			usenet)  (( USE_USENET ))  || INACTIVE+=(sabnzbd) ;;
+			docs)    (( USE_DOCS ))    || INACTIVE+=(paperless) ;;
+			radio)   (( USE_RADIO ))   || INACTIVE+=(aircheckarr) ;;
+		esac
+	else
+		INACTIVE+=("${TILE_OF[$k]}")
+	fi
+done
 if [[ -f $REPO_DIR/homepage/services.yaml.tmpl ]]; then
 	# Die Daten kommen ueber eine eigene Datei, denn stdin von python3 -
 	# ist schon mit dem Skript selbst belegt.
@@ -1927,37 +2091,37 @@ KUMA_DB="$REPO_DIR/config/uptime-kuma/kuma.db"
 if [[ -f $KUMA_DB ]]; then
 	docker compose stop uptime-kuma >>"$LOG" 2>&1
 	KUMA_OUT="$(python3 - "$KUMA_DB" "${LAN_IP:-127.0.0.1}" \
-		"$USE_TORRENT" "$USE_USENET" "$USE_DOCS" "$USE_RADIO" 2>>"$LOG" <<'PY'
+		"$(IFS=,; echo "${ACTIVE[*]}")" 2>>"$LOG" <<'PY'
 import json, sqlite3, sys
 
-db, lan, torrent, usenet, docs, radio = sys.argv[1:7]
+db, lan, selected = sys.argv[1:4]
+aktiv = set(selected.split(","))
 
 # Name, Adresse. Die Adressen sind containerintern, Kuma haengt im selben
 # Netz. Plex laeuft im Host-Netz und ist nur ueber die LAN-Adresse zu
 # erreichen. /ping bzw. /identity antworten ohne Anmeldung.
-mon = [
-    ("Plex",        "http://%s:32400/identity" % lan),
-    ("Serien",      "http://sonarr:8989/ping"),
-    ("Filme",       "http://radarr:7878/ping"),
-    ("Musik-Suche", "http://lidarr:8686/ping"),
-    ("Suchquellen", "http://prowlarr:9696/ping"),
-    ("Untertitel",  "http://bazarr:6767/"),
-    ("Wuensche",    "http://overseerr:5055/api/v1/status"),
-    ("Musik",       "http://navidrome:4533/ping"),
-    ("Hoerbuecher", "http://audiobookshelf:80/healthcheck"),
-    ("Statistiken", "http://tautulli:8181/status"),
-    ("Aufraeumen",  "http://cleanuparr:11011/health"),
-    ("Startseite",  "http://homepage:3000/"),
-]
+# Schluessel, Anzeigename, Adresse. Ueberwacht wird nur, was auch laeuft:
+# ein Monitor auf einen abgewaehlten Dienst stuende dauerhaft auf rot.
 # qBittorrent haengt im Netz von gluetun, deshalb gluetun:8080.
-if torrent == "1":
-    mon.append(("Torrents", "http://gluetun:8080/"))
-if usenet == "1":
-    mon.append(("Usenet", "http://sabnzbd:8080/"))
-if docs == "1":
-    mon.append(("Dokumente", "http://paperless:8000/"))
-if radio == "1":
-    mon.append(("Radiomitschnitt", "http://aircheckarr:8099/health"))
+alle = [
+    ("plex",           "Plex",            "http://%s:32400/identity" % lan),
+    ("sonarr",         "Serien",          "http://sonarr:8989/ping"),
+    ("radarr",         "Filme",           "http://radarr:7878/ping"),
+    ("lidarr",         "Musik-Suche",     "http://lidarr:8686/ping"),
+    ("prowlarr",       "Suchquellen",     "http://prowlarr:9696/ping"),
+    ("bazarr",         "Untertitel",      "http://bazarr:6767/"),
+    ("overseerr",      "Wuensche",        "http://overseerr:5055/api/v1/status"),
+    ("navidrome",      "Musik",           "http://navidrome:4533/ping"),
+    ("audiobookshelf", "Hoerbuecher",     "http://audiobookshelf:80/healthcheck"),
+    ("tautulli",       "Statistiken",     "http://tautulli:8181/status"),
+    ("cleanuparr",     "Aufraeumen",      "http://cleanuparr:11011/health"),
+    ("homepage",       "Startseite",      "http://homepage:3000/"),
+    ("torrent",        "Torrents",        "http://gluetun:8080/"),
+    ("usenet",         "Usenet",          "http://sabnzbd:8080/"),
+    ("docs",           "Dokumente",       "http://paperless:8000/"),
+    ("radio",          "Radiomitschnitt", "http://aircheckarr:8099/health"),
+]
+mon = [(name, url) for key, name, url in alle if key in aktiv]
 
 c = sqlite3.connect(db)
 row = c.execute("select id from user order by id limit 1").fetchone()

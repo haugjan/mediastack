@@ -41,6 +41,11 @@ nötig sind.
 
 ### Was genau passiert
 
+Vor Schritt 1 kommt die Auswahl: eine Liste aller Dienste und Optionen, alles
+angekreuzt. Was du nicht willst, wählst du mit der Nummer ab — einzeln, vom
+Dokumentenarchiv bis zur Untertitelsuche. Danach fragt das Skript nur noch
+nach dem, was es von außen braucht.
+
 | Schritt | Inhalt |
 |---|---|
 | 1 | System prüfen, Docker und fehlende Pakete nachinstallieren, Ruhezustand abschalten |

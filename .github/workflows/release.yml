@@ -90,29 +90,31 @@ jobs:
           sys.exit(bad)
           PY
 
-      - name: Compose, Minimalbetrieb ohne jeden Zugang
+      - name: Compose, ohne Auswahl startet nichts
         run: |
           sed -e 's/^\([A-Z_]*\)=$/\1=dummy/' \
               -e 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=/' \
               .env.example > /tmp/min.env
           docker compose --env-file /tmp/min.env config -q
           N=$(docker compose --env-file /tmp/min.env config --services | wc -l)
-          echo "Dienste ohne Profile: $N"
-          # Ohne externe Zugaenge muss ein brauchbarer Server uebrig bleiben.
-          test "$N" -ge 15 || { echo "Zu wenige Kerndienste"; exit 1; }
-          # Und die Profil-Dienste duerfen NICHT dabei sein, sonst laufen sie
-          # ohne Zugangsdaten in eine Neustartschleife.
-          for s in gluetun qbittorrent sabnzbd paperless caddy; do
-            if docker compose --env-file /tmp/min.env config --services | grep -qx "$s"; then
-              echo "FEHLER: $s startet ohne Profil"; exit 1
-            fi
-          done
-          echo "OK   Profile schirmen die optionalen Dienste ab"
+          # Jeder Dienst haengt an einem eigenen Profil, damit man ihn im
+          # Installer einzeln abwaehlen kann. Ohne Profile darf deshalb
+          # nichts uebrig bleiben - und kein Dienst darf sich an der Auswahl
+          # vorbeimogeln, indem er gar kein Profil hat.
+          test "$N" -eq 0 || {
+            echo "FEHLER: $N Dienst(e) starten ohne jedes Profil:"
+            docker compose --env-file /tmp/min.env config --services
+            exit 1
+          }
+          echo "OK   ohne Auswahl startet kein einziger Dienst"
 
       - name: Compose, alle Profile aktiv
         run: |
+          PROFILES=$(grep -o 'profiles: \[[a-z]*\]' compose.yaml \
+            | sed 's/.*\[//;s/\]//' | sort -u | paste -sd,)
+          echo "Profile: $PROFILES"
           sed -e 's/^\([A-Z_]*\)=$/\1=dummy/' \
-              -e 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=torrent,usenet,docs,proxy,extras/' \
+              -e "s/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=$PROFILES/" \
               .env.example > /tmp/all.env
           docker compose --env-file /tmp/all.env config -q
           echo "Dienste mit allen Profilen: $(docker compose --env-file /tmp/all.env config --services | wc -l)"
@@ -129,7 +131,9 @@ jobs:
           up=s['gluetun']['environment']['VPN_PORT_FORWARDING_UP_COMMAND']
           assert '\n' not in up, 'Port-Forwarding-Kommando ist umgebrochen'
           assert all(v.get('restart') for v in s.values()), 'Dienst ohne restart-Policy'
-          print('OK   Netzwerk- und Restart-Zusicherungen halten')
+          ohne = [n for n, v in s.items() if not v.get('profiles')]
+          assert not ohne, f'Dienste ohne Profil, im Installer nicht abwaehlbar: {ohne}'
+          print(f'OK   {len(s)} Dienste, alle mit Profil, Netzwerk und Restart stimmen')
           "
 
       - name: Caddy bauen und Konfiguration pruefen
