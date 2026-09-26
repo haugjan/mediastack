@@ -28,6 +28,13 @@ sonarr:
     base_url: http://sonarr:8989
     api_key: !env_var SONARR_API_KEY
 
+    # Ab Werk nimmt Sonarr ein REPACK oder PROPER immer, egal wie es sonst
+    # bewertet ist. Ein englisches REPACK schlug so jede deutsche Fassung:
+    # "Existing file on disk is of equal or higher revision". Die Profile
+    # bewerten Repacks selbst ueber ein Custom Format, deshalb hier aus.
+    media_management:
+      propers_and_repacks: do_not_prefer
+
     quality_definition:
       type: series
 
@@ -47,6 +54,13 @@ radarr:
   filme:
     base_url: http://radarr:7878
     api_key: !env_var RADARR_API_KEY
+
+    # Ab Werk nimmt Radarr ein REPACK oder PROPER immer, egal wie es sonst
+    # bewertet ist. Ein englisches REPACK schlug so jede deutsche Fassung:
+    # "Existing file on disk is of equal or higher revision". Die Profile
+    # bewerten Repacks selbst ueber ein Custom Format, deshalb hier aus.
+    media_management:
+      propers_and_repacks: do_not_prefer
 
     quality_definition:
       type: movie

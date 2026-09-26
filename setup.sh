@@ -2096,6 +2096,43 @@ PY
 		3) ok "SABnzbd kennt seine Namen bereits" ;;
 		*) problem "SABnzbd: Hostnamen liessen sich nicht freigeben (403 in Sonarr & Co.)" ;;
 	esac
+	# Caddy reicht die Adresse des Aufrufers als X-Forwarded-For durch, und
+	# SABnzbd prueft die mit. Tailscale-Adressen (100.64.0.0/10) zaehlen ab
+	# Werk nicht als lokal, jeder Aufruf ueber sab.<domain> endet deshalb bei
+	# "External internet access denied". Die API nimmt local_ranges nicht an,
+	# also die Datei, und nur im gestoppten Zustand, sonst schreibt SABnzbd
+	# beim Beenden den alten Stand zurueck. Wer den Wert selbst gesetzt hat,
+	# behaelt ihn.
+	SAB_INI=config/sabnzbd/sabnzbd.ini
+	if [[ -f $SAB_INI ]] && grep -Eq '^local_ranges = ,?$' "$SAB_INI"; then
+		docker compose stop sabnzbd >>"$LOG" 2>&1
+		sed -i 's|^local_ranges = .*|local_ranges = 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10|' "$SAB_INI"
+		docker compose start sabnzbd >>"$LOG" 2>&1
+		for _ in $(seq 30); do
+			curl -fsS -o /dev/null --max-time 3 "http://localhost:8081/api?mode=version&apikey=$sk" && break
+			sleep 2
+		done
+		ok "SABnzbd: Zugriff ueber Tailscale und Heimnetz erlaubt"
+	fi
+	# Ab Werk laedt SABnzbd nach /config/Downloads, also neben /data. Von dort
+	# kann Sonarr nur kopieren statt hardlinken, und den Pfad kennt es gar
+	# nicht. Die Kategorien sind die, die Sonarr & Co. unten mitschicken;
+	# fehlt eine, landet alles ungeordnet im Wurzelordner.
+	sab_set() {
+		curl -fsS -o /dev/null --max-time 10 -G http://localhost:8081/api \
+			--data-urlencode mode=set_config --data-urlencode "apikey=$sk" \
+			"$@" >>"$LOG" 2>&1
+	}
+	sab_set --data-urlencode section=misc --data-urlencode keyword=download_dir \
+			--data-urlencode value=/data/usenet/incomplete \
+		&& sab_set --data-urlencode section=misc --data-urlencode keyword=complete_dir \
+			--data-urlencode value=/data/usenet/complete \
+		&& ok "SABnzbd: laedt nach /data/usenet" \
+		|| problem "SABnzbd: Download-Ordner nicht gesetzt"
+	for c in tv movies music books; do
+		sab_set --data-urlencode section=categories --data-urlencode "name=$c" \
+			--data-urlencode "dir=$c" || problem "SABnzbd: Kategorie $c nicht angelegt"
+	done
 	for spec in "8989${US}v3${US}$SONARR_KEY${US}tvCategory${US}tv" \
 	            "7878${US}v3${US}$RADARR_KEY${US}movieCategory${US}movies" \
 	            "8686${US}v1${US}$LIDARR_KEY${US}musicCategory${US}music"; do
@@ -2240,6 +2277,50 @@ if want mediathek; then
 	# erste. Was es bei Usenet oder im Tracker gibt, ist meist besser
 	# aufgeloest und ohne Sendungslogo in der Ecke.
 	(( MTKOK )) && ok "Mediathekarr als Download-Client in $MTKOK Apps eingetragen"
+
+	# Die Prioritaet allein reicht nicht. Fehlt SABnzbd, ist der Blackhole
+	# der einzige Usenet-Client, und Sonarr schickt ihm auch die Treffer von
+	# NZBgeek & Co. Mediathekarr kennt die nicht, und die Folge haengt fuer
+	# immer. Deshalb die Suchquelle Mediathekarr fest an ihren Client binden:
+	# dann geht nur, was aus der Mediathek kommt, dorthin. Prowlarr laesst
+	# diese Bindung beim Abgleich stehen. Die Suchquelle taucht erst auf,
+	# wenn Prowlarr abgeglichen hat, sonst holt es der naechste Lauf nach.
+	for spec in "8989${US}v3${US}${SONARR_KEY}" "7878${US}v3${US}${RADARR_KEY}"; do
+		IFS="$US" read -r port api key <<<"$spec"
+		[[ -n $key ]] || continue
+		python3 - "http://localhost:$port/api/$api" "$key" >>"$LOG" 2>&1 <<'PY'
+import json, sys, urllib.request
+
+base, key = sys.argv[1], sys.argv[2]
+
+def req(path, data=None, method=None):
+    r = urllib.request.Request(
+        base + path, method=method or ("PUT" if data is not None else "GET"),
+        data=json.dumps(data).encode() if data is not None else None,
+        headers={"X-Api-Key": key, "Content-Type": "application/json"})
+    with urllib.request.urlopen(r, timeout=30) as f:
+        body = f.read()
+        return json.loads(body) if body else None
+
+bh = [c for c in req("/downloadclient")
+      if c["implementation"] == "UsenetBlackhole" and c["name"] == "Mediathekarr"]
+idx = [i for i in req("/indexer") if i["name"].startswith("Mediathekarr")]
+if not bh or not idx:
+    sys.exit(1)
+changed = False
+for i in idx:
+    if i.get("downloadClientId") != bh[0]["id"]:
+        i["downloadClientId"] = bh[0]["id"]
+        req("/indexer/%d" % i["id"], i)
+        changed = True
+sys.exit(0 if changed else 3)
+PY
+		case $? in
+			0) ok "Mediathekarr: nur eigene Treffer an den eigenen Client (Port $port)" ;;
+			3) ;;
+			*) info "Mediathekarr-Suchquelle noch nicht abgeglichen (Port $port), naechster Lauf" ;;
+		esac
+	done
 fi
 
 # --- FlareSolverr in Prowlarr eintragen
