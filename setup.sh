@@ -1753,7 +1753,15 @@ fi
 RECREATE=(recyclarr unpackerr backfill homepage)
 (( USE_RADIO )) && RECREATE+=(aircheckarr)
 want mediathek && RECREATE+=(mediathekarr)
-(( FOUND )) && docker compose up -d --force-recreate "${RECREATE[@]}" >>"$LOG" 2>&1
+# Einzeln, nicht in einem Aufruf: scheitert Compose an einem Dienst, bricht
+# es den ganzen Aufruf ab, und alle anderen liefen unbemerkt mit dem alten
+# Image und den alten Schluesseln weiter.
+if (( FOUND )); then
+	for svc in "${RECREATE[@]}"; do
+		docker compose up -d --force-recreate "$svc" >>"$LOG" 2>&1 \
+			|| problem "$svc liess sich nicht neu starten (Details in setup.log)"
+	done
+fi
 
 # =========================================================================
 # Apps untereinander verkabeln
