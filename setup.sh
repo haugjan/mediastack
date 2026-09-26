@@ -314,12 +314,13 @@ suggest_path() {
 	existing="$(env_get DATA_ROOT 2>/dev/null || true)"
 	if [[ -n $existing && -d $existing ]]; then echo "$existing"; return; fi
 	[[ -d /mnt/data ]] && { echo /mnt/data; return; }
-	# Groesste beschreibbare Partition nehmen.
+	# Groesste beschreibbare Partition nehmen. Nur echte Partitionen: laufende
+	# Container haengen ihre Overlays unter /var/lib/docker ein.
 	while read -r mp free; do
 		[[ -w $mp ]] || continue
 		(( free > bestfree )) && { bestfree=$free; best=$mp; }
-	done < <(df -BG --output=target,avail 2>/dev/null | tail -n +2 \
-		| grep -E '^/($|mnt|media|srv|home|var)' | tr -d 'G')
+	done < <(df -BG -x overlay -x tmpfs -x devtmpfs --output=target,avail 2>/dev/null \
+		| tail -n +2 | grep -E '^/((mnt|media|srv|home|var)[^ ]*)? ' | tr -d 'G')
 	if [[ -n $best ]]; then
 		[[ $best == / ]] && echo /srv/mediastack || echo "$best/mediastack"
 	else
@@ -329,7 +330,8 @@ suggest_path() {
 
 echo "  Hier landen Filme, Serien, Musik und Dokumente. Es muss VIEL Platz sein"
 echo "  und alles muss auf derselben Festplatte liegen."
-df -h --output=target,size,avail 2>/dev/null | grep -E '^/($|mnt|media|srv|home)' \
+df -h -x overlay -x tmpfs -x devtmpfs --output=target,size,avail 2>/dev/null \
+	| grep -E '^/((mnt|media|srv|home)[^ ]*)? ' \
 	| sed 's/^/    /' | head -8
 DATA_ROOT="$(ask "Speicherort" "$(suggest_path)")"
 mkdir -p "$DATA_ROOT" 2>/dev/null || stop "Kann $DATA_ROOT nicht anlegen."
