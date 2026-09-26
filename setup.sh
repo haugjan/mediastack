@@ -1586,6 +1586,29 @@ qbit_login() {
 		--data-urlencode "username=$(env_get QBIT_USER)" --data-urlencode "password=$1" \
 		http://localhost:8080/api/v2/auth/login 2>>"$LOG"
 }
+# Traegt den vom VPN zugewiesenen Port in qBittorrent ein. Gluetun tut das
+# eigentlich selbst per up-command, aber nur EINMAL, im Moment der
+# Zuweisung. Wird qBittorrent zusammen mit gluetun neu gestartet, lauscht es
+# da noch nicht, gluetun bekommt "Connection refused", und qBittorrent
+# bleibt auf dem Standardport 6881 - der Tunnel steht dann, der Port ist
+# weitergeleitet, und trotzdem kommt niemand herein.
+qbit_set_port() {
+	local port="$1" jar code
+	[[ -n $port && $port != 0 ]] || return 1
+	jar="$(mktemp)"
+	code="$(qbit_login "$(env_get QBIT_PASS)" "$jar")"
+	if [[ $code == 20[04] ]]; then
+		curl -sS -o /dev/null -b "$jar" --max-time 10 \
+			--data-urlencode "json={\"listen_port\":$port,\"random_port\":false,\"upnp\":false}" \
+			http://localhost:8080/api/v2/app/setPreferences >>"$LOG" 2>&1
+		code=0
+	else
+		code=1
+	fi
+	rm -f "$jar"
+	return $code
+}
+
 qbit_setup() {
 	local tmp pw jar code i
 	[[ -n $(env_get QBIT_USER) ]] || return 1
@@ -2247,6 +2270,13 @@ if (( USE_TORRENT )); then
 					[[ -n $fp && $fp != 0 ]] && break
 				done
 			fi
+		fi
+		# Auch wenn der Port schon vorher da war: nach einem gemeinsamen
+		# Neustart von gluetun und qBittorrent hat ihn niemand eingetragen.
+		if [[ -n $fp && $fp != 0 ]]; then
+			qbit_set_port "$fp" \
+				&& ok "Port $fp in qBittorrent eingetragen" \
+				|| note "Port $fp konnte nicht in qBittorrent eingetragen werden"
 		fi
 		if [[ -n $fp && $fp != 0 ]]; then
 			ok "Eingehender Port vom VPN: $fp"
