@@ -530,6 +530,10 @@ services:
     image: louislam/uptime-kuma:1
     container_name: uptime-kuma
     profiles: [uptime]
+    # Plex laeuft im Host-Netz. Ueber die LAN-Adresse waere der Monitor
+    # rot, sobald der Rechner in einem anderen Netz haengt.
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - ./config/uptime-kuma:/app/data
     ports:

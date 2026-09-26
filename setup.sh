@@ -1545,16 +1545,34 @@ else
 	info "Medienverwaltung nachtragen: /data/media/tv, /movies, /music."
 fi
 
-# --- Tautulli: API freigeben
+# --- Tautulli: API freigeben und Plex fest adressieren
 # Der Einrichtungsassistent von Tautulli schaltet die API aus. Ohne sie
 # bleibt die Plex-Kachel auf der Startseite bei "API not enabled". Die
 # Datei nur im gestoppten Zustand aendern, sonst schreibt Tautulli beim
 # Beenden seinen alten Stand zurueck.
-if [[ -f config/tautulli/config.ini ]] && grep -q '^api_enabled = 0' config/tautulli/config.ini; then
-	docker compose stop tautulli >>"$LOG" 2>&1
-	sed -i 's/^api_enabled = 0/api_enabled = 1/' config/tautulli/config.ini
-	docker compose start tautulli >>"$LOG" 2>&1
-	ok "Tautulli: API freigegeben"
+#
+# Ausserdem traegt der Assistent Plex mit der LAN-Adresse ein. Haengt der
+# Rechner spaeter in einem anderen Netz, gibt es die nicht mehr, und die
+# Kachel meldet "Check Plex Connection". host.docker.internal zeigt immer
+# auf den Rechner selbst, wo Plex im Host-Netz lauscht. pms_url_manual=1,
+# damit Tautulli die Adresse nicht wieder aus plex.tv zuruecksetzt.
+TT_INI=config/tautulli/config.ini
+if [[ -f $TT_INI ]]; then
+	TT_API=0; TT_PMS=0
+	grep -q '^api_enabled = 0' "$TT_INI" && TT_API=1
+	grep -Eq '^pms_ip = .+' "$TT_INI" \
+		&& ! grep -q '^pms_ip = host.docker.internal$' "$TT_INI" && TT_PMS=1
+	if (( TT_API || TT_PMS )); then
+		docker compose stop tautulli >>"$LOG" 2>&1
+		(( TT_API )) && sed -i 's/^api_enabled = 0/api_enabled = 1/' "$TT_INI"
+		(( TT_PMS )) && sed -i \
+			-e 's|^pms_ip = .*|pms_ip = host.docker.internal|' \
+			-e 's|^pms_url = http\(s\?\)://[^:/]*|pms_url = http\1://host.docker.internal|' \
+			-e 's|^pms_url_manual = .*|pms_url_manual = 1|' "$TT_INI"
+		docker compose start tautulli >>"$LOG" 2>&1
+		(( TT_API )) && ok "Tautulli: API freigegeben"
+		(( TT_PMS )) && ok "Tautulli: Plex unter fester Adresse eingetragen"
+	fi
 fi
 
 # --- qBittorrent: festes Passwort statt des temporaeren
@@ -2112,21 +2130,22 @@ fi
 KUMA_DB="$REPO_DIR/config/uptime-kuma/kuma.db"
 if [[ -f $KUMA_DB ]]; then
 	docker compose stop uptime-kuma >>"$LOG" 2>&1
-	KUMA_OUT="$(python3 - "$KUMA_DB" "${LAN_IP:-127.0.0.1}" \
+	KUMA_OUT="$(python3 - "$KUMA_DB" \
 		"$(IFS=,; echo "${ACTIVE[*]}")" 2>>"$LOG" <<'PY'
 import json, sqlite3, sys
 
-db, lan, selected = sys.argv[1:4]
+db, selected = sys.argv[1:3]
 aktiv = set(selected.split(","))
 
 # Name, Adresse. Die Adressen sind containerintern, Kuma haengt im selben
-# Netz. Plex laeuft im Host-Netz und ist nur ueber die LAN-Adresse zu
-# erreichen. /ping bzw. /identity antworten ohne Anmeldung.
+# Netz. Plex laeuft im Host-Netz und ist ueber host.docker.internal zu
+# erreichen, nicht ueber die LAN-Adresse: die aendert sich mit dem Netz.
+# /ping bzw. /identity antworten ohne Anmeldung.
 # Schluessel, Anzeigename, Adresse. Ueberwacht wird nur, was auch laeuft:
 # ein Monitor auf einen abgewaehlten Dienst stuende dauerhaft auf rot.
 # qBittorrent haengt im Netz von gluetun, deshalb gluetun:8080.
 alle = [
-    ("plex",           "Plex",            "http://%s:32400/identity" % lan),
+    ("plex",           "Plex",            "http://host.docker.internal:32400/identity"),
     ("sonarr",         "Serien",          "http://sonarr:8989/ping"),
     ("radarr",         "Filme",           "http://radarr:7878/ping"),
     ("lidarr",         "Musik-Suche",     "http://lidarr:8686/ping"),
@@ -2149,6 +2168,10 @@ c = sqlite3.connect(db)
 row = c.execute("select id from user order by id limit 1").fetchone()
 if not row:
     print("kein-konto"); raise SystemExit(0)
+
+# Aeltere Laeufe haben Plex mit der LAN-Adresse eingetragen.
+c.execute("update monitor set url = ? where url like 'http://%:32400/identity' "
+          "and url <> ?", (dict((k, u) for k, _, u in alle)["plex"],) * 2)
 
 have = {r[0] for r in c.execute("select name from monitor")}
 added = 0
@@ -2197,7 +2220,39 @@ if (( USE_TORRENT )); then
 	if [[ -n $fp && $fp != 0 ]]; then
 		ok "Eingehender Port vom VPN: $fp"
 	else
-		problem "Keine Portweiterleitung vom VPN. Schluessel bei Proton neu erzeugen und dabei NAT-PMP und P2P aktivieren, sonst seedet qBittorrent nicht."
+		note "Keine Portweiterleitung vom VPN."
+		echo "  Bei WireGuard entscheidet sich das beim ERZEUGEN des Schluessels:"
+		echo "  im Proton-Konto unter Downloads muessen NAT-PMP (Port Forwarding)"
+		echo "  und P2P angehakt sein. Nachtraeglich laesst sich das nicht"
+		echo "  umstellen, es braucht einen neuen Schluessel. Der alte bleibt"
+		echo "  gueltig, du bekommst einfach einen zweiten."
+		echo "  Ohne Bezahlplan bietet Proton die Weiterleitung gar nicht an."
+		echo
+		# Ohne diese Rueckfrage landet man in einer Sackgasse: ein zweiter
+		# Lauf fragt nicht nach dem Schluessel, weil schon einer in der .env
+		# steht, und man muesste die Datei von Hand aendern.
+		if ask_yn "Neuen Schluessel jetzt eintragen?" n; then
+			k="$(ask_secret "WireGuard PrivateKey")"
+			if [[ -n $k ]]; then
+				env_set PROTON_WG_PRIVATE_KEY "$k"
+				try "gluetun und qBittorrent mit dem neuen Schluessel gestartet" \
+					docker compose up -d --force-recreate gluetun qbittorrent
+				# Proton weist den Port erst nach dem Verbinden zu, das
+				# dauert ein paar Sekunden.
+				info "Warte auf die Portzuweisung"
+				for _ in $(seq 1 24); do
+					sleep 5
+					fp=$(docker compose exec -T gluetun sh -c \
+						'cat /tmp/gluetun/forwarded_port 2>/dev/null' 2>/dev/null | tr -d '[:space:]')
+					[[ -n $fp && $fp != 0 ]] && break
+				done
+			fi
+		fi
+		if [[ -n $fp && $fp != 0 ]]; then
+			ok "Eingehender Port vom VPN: $fp"
+		else
+			problem "Keine Portweiterleitung vom VPN. Schluessel bei Proton neu erzeugen und dabei NAT-PMP und P2P aktivieren, sonst seedet qBittorrent nicht."
+		fi
 	fi
 fi
 
