@@ -107,6 +107,7 @@
 		music.lan.{$BASE_DOMAIN} 4533
 		books.lan.{$BASE_DOMAIN} 13378
 		radio.lan.{$BASE_DOMAIN} 8099
+		mediathek.lan.{$BASE_DOMAIN} 8098
 		home.lan.{$BASE_DOMAIN} 3000
 		sonarr.lan.{$BASE_DOMAIN} 8989
 		radarr.lan.{$BASE_DOMAIN} 7878
@@ -167,6 +168,11 @@ books.{$BASE_DOMAIN} {
 # Radiomitschnitte.
 radio.{$BASE_DOMAIN} {
 	import private_app 8099
+}
+
+# Mediatheken als Quelle.
+mediathek.{$BASE_DOMAIN} {
+	import private_app 8098
 }
 
 # Dashboard.

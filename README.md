@@ -111,6 +111,7 @@ Prowlarr  ──► Suchquellen
 
 Aircheckarr     Wunschtitel aus dem Webradio mitschneiden (optional)
 
+Mediathekarr    ARD, ZDF, SRF und ORF als Quelle fuer Sonarr und Radarr
 Paperless-ngx   Dokumente mit Volltextsuche, OCR auf Deutsch
 Homepage        Startseite mit Live-Status
 Uptime Kuma     läuft alles noch
@@ -268,6 +269,7 @@ systemd/                      Timer fuer OneDrive und Sicherung
 scripts/update.sh             neue Version holen, ohne git und ohne gh
 scripts/backfill.py           gedrosselte Nachsuche, Huntarr-Ersatz
 aircheckarr/                  Radiomitschnitt, eigener Dienst in C#
+mediathekarr/                 Mediatheken als Quelle, eigener Dienst in C#
 scripts/paperless-inbox.sh    OneDrive -> consume/
 scripts/paperless-export.sh   export/ -> OneDrive, Klartext und verschluesselt
 scripts/backup-config.sh      config/ verschluesselt sichern

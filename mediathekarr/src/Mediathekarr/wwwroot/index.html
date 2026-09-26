@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mediathekarr</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="favicon.svg">
+</head>
+<body>
+<header>
+  <h1>Mediathekarr</h1>
+  <span>Die Mediatheken von ARD, ZDF, SRF und ORF als Quelle für Sonarr und Radarr</span>
+</header>
+<main>
+  <section>
+    <h2>Suche ausprobieren</h2>
+    <form id="suchform">
+      <input id="suche" placeholder="Tatort, Dok, Filmtitel …" autocomplete="off">
+      <button type="submit">Suchen</button>
+    </form>
+    <div id="treffer" class="leer">Hier siehst du, was Sonarr und Radarr angeboten bekämen.</div>
+  </section>
+  <section>
+    <h2>Abgeholt</h2>
+    <div id="auftraege" class="leer">Noch nichts abgeholt.</div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

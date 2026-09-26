@@ -34,7 +34,7 @@ declare -A PORT=(
 	[paperless]=8000 [sonarr]=8989 [radarr]=7878 [lidarr]=8686
 	[prowlarr]=9696 [bazarr]=6767 [qbittorrent]=8080 [sabnzbd]=8081
 	[homepage]=3000 [uptime]=3001 [scrutiny]=8082 [cleanuparr]=11011
-	[tautulli]=8181 [aircheckarr]=8099
+	[tautulli]=8181 [aircheckarr]=8099 [mediathekarr]=8098
 )
 # Dienst -> Subdomain, falls eine Domain eingerichtet ist.
 declare -A SUB=(
@@ -42,7 +42,7 @@ declare -A SUB=(
 	[paperless]=paperless [sonarr]=sonarr [radarr]=radarr [lidarr]=lidarr
 	[prowlarr]=prowlarr [bazarr]=bazarr [qbittorrent]=qbit [sabnzbd]=sab
 	[homepage]=home [uptime]=status [scrutiny]=disks [cleanuparr]=clean
-	[tautulli]=stats [aircheckarr]=radio
+	[tautulli]=stats [aircheckarr]=radio [mediathekarr]=mediathek
 )
 
 # --------------------------------------------------------------- Darstellung
@@ -251,6 +251,7 @@ CATALOG=(
 "usenet|dienst|Usenet|SABnzbd (braucht ein Abo)|usenet|sabnzbd"
 "docs|dienst|Dokumentenarchiv|Paperless mit OCR auf Deutsch|docs|paperless"
 "radio|dienst|Radiomitschnitt|Aircheckarr: schneidet Wunschtitel aus Webradios|radio|aircheckarr"
+"mediathek|dienst|Mediatheken|Mediathekarr: ARD, ZDF, SRF und ORF als Quelle fuer Sonarr und Radarr|mediathek|mediathekarr"
 "kometa|dienst|Poster und Sammlungen|Kometa (braucht eine eigene config.yml)|kometa|"
 "scrutiny|dienst|Festplattenzustand|Scrutiny (braucht eine passende devices-Liste)|scrutiny|scrutiny"
 "tailscale|option|Zugriff von unterwegs|Tailscale, ohne offenen Port am Router||"
@@ -525,6 +526,8 @@ mkdir -p \
 	"$DATA_ROOT"/media/{movies,tv,music,audiobooks,books} \
 	"$DATA_ROOT"/youtube \
 	"$DATA_ROOT"/aircheck \
+	"$DATA_ROOT"/mediathek/blackhole/{tv,movies} \
+	"$DATA_ROOT"/mediathek/complete/{tv,movies} \
 	"$DATA_ROOT"/paperless/{data,media,consume,export}
 chown -R "$MEDIA_USER":"$MEDIA_GROUP" "$DATA_ROOT" 2>>"$LOG"
 find "$DATA_ROOT" -type d -exec chmod 2775 {} + 2>>"$LOG"
@@ -534,7 +537,7 @@ ok "Ordnerstruktur angelegt"
 # root an und die Container duerfen nicht hineinschreiben.
 mkdir -p "$REPO_DIR"/config/{gluetun,qbittorrent,sabnzbd,prowlarr,sonarr,radarr,lidarr,bazarr}
 mkdir -p "$REPO_DIR"/config/{plex,navidrome,overseerr,tautulli,kometa,cleanuparr,uptime-kuma}
-mkdir -p "$REPO_DIR"/config/{paperless-db,paperless-redis,aircheckarr}
+mkdir -p "$REPO_DIR"/config/{paperless-db,paperless-redis,aircheckarr,mediathekarr}
 mkdir -p "$REPO_DIR"/config/audiobookshelf/{config,metadata}
 mkdir -p "$REPO_DIR"/config/scrutiny/{config,influxdb}
 mkdir -p "$REPO_DIR"/config/caddy/{data,config}
@@ -1543,6 +1546,10 @@ if (( USE_RADIO )); then
 	info "Aircheckarr bauen, das dauert einige Minuten"
 	try "Aircheckarr gebaut" docker compose build aircheckarr
 fi
+if want mediathek; then
+	info "Mediathekarr bauen, das dauert einige Minuten"
+	try "Mediathekarr gebaut" docker compose build mediathekarr
+fi
 
 info "Images holen, das dauert je nach Leitung 5 bis 20 Minuten"
 try "Images geholt" docker compose pull --ignore-buildable -q
@@ -1745,6 +1752,7 @@ fi
 # aktives Profil laesst sich nicht neu starten.
 RECREATE=(recyclarr unpackerr backfill homepage)
 (( USE_RADIO )) && RECREATE+=(aircheckarr)
+want mediathek && RECREATE+=(mediathekarr)
 (( FOUND )) && docker compose up -d --force-recreate "${RECREATE[@]}" >>"$LOG" 2>&1
 
 # =========================================================================
@@ -2115,6 +2123,38 @@ if [[ -n $PKEY ]] && api_ready 9696 v1 "$PKEY"; then
 	fi
 fi
 
+# --- Mediathekarr als Quelle anmelden
+# Zwei Haelften: der Indexer in Prowlarr, damit Sonarr und Radarr die
+# Mediatheken mitdurchsuchen, und je ein Blackhole-Download-Client, damit
+# sie das Gefundene auch abholen lassen koennen. Blackhole heisst hier: die
+# App legt eine .nzb in einen Ordner, Mediathekarr laedt die Sendung und
+# stellt sie fertig daneben - alles unter /data, also wird beim Import
+# verlinkt statt kopiert.
+if want mediathek; then
+	if [[ -n $PKEY ]] && api_ready 9696 v1 "$PKEY"; then
+		if arr_add "http://localhost:9696/api/v1" "$PKEY" indexer Newznab \
+			'{"name":"Mediathekarr","enable":true,"enableRss":false,"enableAutomaticSearch":true,"enableInteractiveSearch":true,"priority":40,"appProfileId":1,"tags":[]}' \
+			"baseUrl=http://mediathekarr:8098${US}apiPath=/api${US}apiKey=mediathekarr"
+		then ok "Mediathekarr als Suchquelle eingetragen"
+		elif [[ $? == 3 ]]; then ok "Mediathekarr steht bereits in Prowlarr"
+		fi
+	fi
+	MTKOK=0
+	for spec in "8989${US}v3${US}${SONARR_KEY}${US}tv" "7878${US}v3${US}${RADARR_KEY}${US}movies"; do
+		IFS="$US" read -r port api key kind <<<"$spec"
+		[[ -n $key ]] || continue
+		if arr_add "http://localhost:$port/api/$api" "$key" downloadclient UsenetBlackhole \
+			'{"name":"Mediathekarr","enable":true,"priority":10,"removeCompletedDownloads":false,"removeFailedDownloads":true}' \
+			"nzbFolder=/data/mediathek/blackhole/${kind}${US}watchFolder=/data/mediathek/complete/${kind}"
+		then MTKOK=$((MTKOK+1))
+		fi
+	done
+	# Priorität 10 statt 1: die Mediathek ist die letzte Wahl, nicht die
+	# erste. Was es bei Usenet oder im Tracker gibt, ist meist besser
+	# aufgeloest und ohne Sendungslogo in der Ecke.
+	(( MTKOK )) && ok "Mediathekarr als Download-Client in $MTKOK Apps eingetragen"
+fi
+
 # --- FlareSolverr in Prowlarr eintragen
 # Indexer hinter Cloudflare antworten Prowlarr sonst mit 403. Der Proxy
 # gilt nicht pauschal, sondern nur fuer Indexer mit dem passenden Tag -
@@ -2320,6 +2360,7 @@ alle = [
     ("usenet",         "Usenet",          "http://sabnzbd:8080/"),
     ("docs",           "Dokumente",       "http://paperless:8000/"),
     ("radio",          "Radiomitschnitt", "http://aircheckarr:8099/health"),
+    ("mediathek",      "Mediatheken",     "http://mediathekarr:8098/health"),
 ]
 mon = [(name, url) for key, name, url in alle if key in aktiv]
 
@@ -2438,6 +2479,7 @@ printf '  %-22s %s\n' "Wuensche"    "$(url_for overseerr)"
 (( USE_TORRENT )) && printf '  %-22s %s\n' "Torrents"  "$(url_for qbittorrent)"
 (( USE_USENET ))  && printf '  %-22s %s\n' "Usenet"    "$(url_for sabnzbd)"
 (( USE_RADIO ))   && printf '  %-22s %s\n' "Radiomitschnitt" "$(url_for aircheckarr)"
+want mediathek    && printf '  %-22s %s\n' "Mediatheken" "$(url_for mediathekarr)"
 
 # Zweiter Weg fuer Geraete im WLAN, die kein Tailscale koennen.
 if (( USE_PROXY )) && [[ -n ${LAN_IP:-} && $LAN_IP != 127.0.0.1 ]]; then

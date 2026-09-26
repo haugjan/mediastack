@@ -160,6 +160,36 @@ erkauft wurden: der **erste Titel nach dem Verbinden wird übersprungen**
 M4A**, weil rohes ADTS keinen Platz für Tags hat und `-metadata` dort
 stillschweigend verfällt.
 
+## mediathekarr
+
+Der zweite selbstgeschriebene Dienst, C# auf .NET 9, gleiche Regeln wie
+aircheckarr: englische Bezeichner, deutsche Kommentare, ASCII,
+`Microsoft.Data.Sqlite` als einzige Abhängigkeit.
+
+Er ist **kein zweiter Wunschzettel**, sondern eine Quelle: Er meldet sich als
+Newznab-Indexer an, und geholt wird über den eingebauten „Usenet
+Blackhole"-Client von Sonarr und Radarr. Ein nachgebauter Download-Client
+müsste deren komplette API mitspielen; Blackhole ist dokumentiert und ändert
+sich nicht.
+
+Drei Dinge, die man nicht kaputtmachen darf:
+
+- **Der Release-Name ist die ganze Schnittstelle.** Die Apps sehen vom
+  Beitrag nichts sonst. Deshalb fragt der Dienst bei Sonarr nach dem
+  Sendedatum einer Folge und benennt den Treffer als `S01E02`; ohne diesen
+  Umweg findet Sonarr nie etwas, weil die Mediatheken nur Sendedaten kennen.
+- **Die Qualität wird aus der Bitrate geschätzt**, nicht pauschal gesetzt.
+  Ein „1080p" auf jedem Beitrag würde die Qualitätsprofile in die Irre führen.
+- **Zweitfassungen fliegen raus** (Audiodeskription, Hörfassung,
+  Gebärdensprache). Sonarr kann sie nicht von der Hauptfassung unterscheiden.
+
+Eine leere Suchanfrage liefert bewusst die jüngsten Sendungen: Genau damit
+prüft Prowlarr einen neuen Indexer, und ohne Antwort verweigert es das
+Anlegen.
+
+Beide Ordner — Blackhole und Fertig — liegen unter `/data`, sonst kopiert der
+Import statt zu verlinken.
+
 ## .env
 
 - **Wird nie committet** (in `.gitignore`, die CI prüft es).

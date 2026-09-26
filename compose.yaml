@@ -456,6 +456,42 @@ services:
   # nichts Fertiges gibt, das an den ICY-Metadaten schneidet statt blind
   # nach Zeit. Steht hinter einem Profil, denn der Bau dauert einige
   # Minuten und ohne Wunschliste tut der Dienst ohnehin nichts.
+  # Die oeffentlich-rechtlichen Mediatheken als Quelle fuer Sonarr und
+  # Radarr. Kein eigener Wunschzettel: der Dienst meldet sich als
+  # Newznab-Indexer an, und die Apps suchen ihn ganz normal mit ab. Geholt
+  # wird ueber den Blackhole-Ordner, den beide Apps als Download-Client
+  # kennen. Die Schluessel braucht er, um Sendedaten in Staffel und Folge
+  # zu uebersetzen - ohne sie faellt er auf Datumsnamen zurueck.
+  mediathekarr:
+    <<: *base
+    build:
+      context: ./mediathekarr
+    image: mediastack/mediathekarr:local
+    container_name: mediathekarr
+    profiles: [mediathek]
+    user: ${PUID}:${PGID}
+    environment:
+      TZ: ${TZ}
+      MEDIATHEKARR_BLACKHOLE: /data/mediathek/blackhole
+      MEDIATHEKARR_COMPLETE: /data/mediathek/complete
+      MEDIATHEKARR_DB: /config/mediathekarr.db
+      MEDIATHEKARR_MIN_DURATION: ${MEDIATHEKARR_MIN_DURATION:-600}
+      MEDIATHEKARR_CHANNELS: ${MEDIATHEKARR_CHANNELS:-}
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: ${RADARR_API_KEY}
+    volumes:
+      - ./config/mediathekarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - 8098:8098
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8098/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
   aircheckarr:
     <<: *base
     build:
