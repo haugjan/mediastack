@@ -62,6 +62,24 @@ nur zu Peers, die sich von selbst melden. Der Installer meldet das am Ende
 als Problem, statt es stillschweigend zu übergehen — der Tunnel selbst steht
 ja, der Fehler fällt sonst monatelang nicht auf.
 
+Zwei Dinge, die man dazu wissen muss:
+
+**Die Haken gehören zum Schlüssel.** Bei WireGuard werden NAT-PMP und P2P
+beim *Erzeugen* der Konfiguration festgelegt und sind Teil des Zugangs.
+Nachträglich umstellen geht nicht — es braucht einen neuen Schlüssel. Der
+alte bleibt dabei gültig, du bekommst einfach einen zweiten. Findet der
+Installer am Ende keinen weitergeleiteten Port, bietet er direkt an, einen
+neuen einzutragen; sonst käme man nicht weiter, weil ein zweiter Lauf nicht
+erneut nach etwas fragt, das schon in der `.env` steht.
+
+**Portweiterleitung gibt es nur im Bezahlplan.** Auf einem kostenlosen Konto
+lehnt Proton NAT-PMP immer ab. Im Protokoll von gluetun sieht das so aus:
+
+```
+ERROR [vpn] starting port forwarding service: getting external IPv4 address:
+read udp 10.2.0.2:...->10.2.0.1:5351: recvfrom: connection refused
+```
+
 ## Was im Browser bleibt
 
 Fünf Dinge, und alle hängen an einem Konto oder an einer Auswahl, die dir
