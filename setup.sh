@@ -235,6 +235,7 @@ CATALOG=(
 "radarr|dienst|Filme|Radarr: dasselbe fuer Filme|radarr|radarr"
 "lidarr|dienst|Musik|Lidarr: Alben nachfuehren|lidarr|lidarr"
 "prowlarr|dienst|Suchquellen|Prowlarr: verteilt die Indexer an alle Apps|prowlarr|prowlarr"
+"flaresolverr|dienst|Cloudflare-Loeser|FlareSolverr: fuer Indexer hinter Cloudflare, etwa 1337x|flaresolverr|"
 "bazarr|dienst|Untertitel|Bazarr: Deutsch vor Englisch|bazarr|bazarr"
 "navidrome|dienst|Musikserver|Navidrome: Subsonic-API fuers Handy und Auto|navidrome|navidrome"
 "audiobookshelf|dienst|Hoerbuecher|Audiobookshelf: Hoerbuecher und E-Books|audiobookshelf|audiobookshelf"
@@ -1044,21 +1045,108 @@ rclone_install() {
 	command -v rclone >/dev/null 2>&1
 }
 
-# Namen der Remotes und der Ordner in OneDrive. Wer eigene will, traegt sie
-# vorher in die .env ein, hier wird nur gefuellt, was leer ist.
+# Namen der Remotes und die Unterordner im verschluesselten Bereich. Die
+# sieht in OneDrive niemand, deshalb wird danach nicht gefragt. Hier wird
+# nur gefuellt, was leer ist.
 rclone_defaults() {
 	local kv k v
 	for kv in \
 		"RCLONE_REMOTE=onedrive" \
 		"RCLONE_REMOTE_CRYPT=onedrive-crypt" \
-		"RCLONE_INBOX_PATH=Scans" \
-		"RCLONE_MIRROR_PATH=Paperless/Spiegel" \
 		"RCLONE_BACKUP_PATH=Paperless/Backup" \
 		"RCLONE_CONFIG_BACKUP_PATH=Mediastack/config"
 	do
 		k="${kv%%=*}"; v="${kv#*=}"
 		[[ -z $(env_get "$k" 2>/dev/null || true) ]] && env_set "$k" "$v"
 	done
+	return 0
+}
+
+# Ordnername aus einer Eingabe: Schraegstriche vorne und hinten weg, damit
+# "/Scans/" und "Scans" dasselbe meinen.
+rclone_clean_path() {
+	local p="$1"
+	while [[ $p == /* ]]; do p="${p#/}"; done
+	while [[ $p == */ ]]; do p="${p%/}"; done
+	echo "$p"
+}
+
+rclone_ask_path() {
+	local key="$1" q="$2" def="$3" val
+	while :; do
+		val="$(rclone_clean_path "$(ask "$q" "$def")")"
+		[[ -n $val ]] && break
+		printf '    Bitte einen Ordner angeben.\n' >&2
+	done
+	env_set "$key" "$val"
+}
+
+# Kein Ordner darf in einem anderen liegen. Der Spiegel wird per "rclone
+# sync" abgeglichen und loescht dabei alles, was nicht aus Paperless kommt:
+# laege der Eingang oder das Backup darin, waeren Scans und Sicherung weg.
+rclone_paths_apart() {
+	local a b a_v b_v
+	for a in RCLONE_INBOX_PATH RCLONE_MIRROR_PATH RCLONE_CRYPT_PATH; do
+		for b in RCLONE_INBOX_PATH RCLONE_MIRROR_PATH RCLONE_CRYPT_PATH; do
+			[[ $a == "$b" ]] && continue
+			a_v="$(env_get "$a")"; b_v="$(env_get "$b")"
+			[[ ${a_v,,} == "${b_v,,}" || ${a_v,,}/ == "${b_v,,}"/* ]] && return 1
+		done
+	done
+	return 0
+}
+
+# Die sichtbaren Ordner in OneDrive. Beim ersten Einrichten mit Vorschlag
+# gefragt, spaeter nur auf Wunsch. "Erstes Mal" heisst: das crypt-Remote gibt
+# es noch nicht. Die .env taugt dafuer nicht, sie kommt aus .env.example
+# schon mit Vorschlaegen gefuellt.
+#
+# Der verschluesselte Ordner laesst sich nur beim ersten Mal waehlen: sein
+# Ort steckt im crypt-Remote, und ein neuer Ort hiesse ein leeres Backup
+# neben dem alten.
+onedrive_paths() {
+	local crypt="$1" v old_inbox="" old_mirror=""
+	if rclone_has "$crypt"; then
+		# Aeltere Installationen kennen RCLONE_CRYPT_PATH noch nicht. Der
+		# Ort steht im Remote selbst, also von dort uebernehmen.
+		v="$(rclone_user config show "$crypt" 2>/dev/null | sed -n 's/^remote = [^:]*://p')"
+		[[ -n $v ]] && env_set RCLONE_CRYPT_PATH "$v"
+		info "Ordner in OneDrive:"
+		info "  Scan-Eingang       $(env_get RCLONE_INBOX_PATH)"
+		info "  Lesbarer Spiegel   $(env_get RCLONE_MIRROR_PATH)"
+		info "  Verschluesselt     $(env_get RCLONE_CRYPT_PATH)"
+		ask_yn "Ordner aendern?" n || return 0
+		old_inbox="$(env_get RCLONE_INBOX_PATH)"; old_mirror="$(env_get RCLONE_MIRROR_PATH)"
+	else
+		echo
+		echo "  Drei Ordner in OneDrive. Enter nimmt den Vorschlag."
+	fi
+	while :; do
+		v="$(env_get RCLONE_INBOX_PATH 2>/dev/null || true)"
+		rclone_ask_path RCLONE_INBOX_PATH \
+			"Scan-Eingang, was hier liegt, holt Paperless ab" "${v:-Scans}"
+		v="$(env_get RCLONE_MIRROR_PATH 2>/dev/null || true)"
+		rclone_ask_path RCLONE_MIRROR_PATH \
+			"Lesbarer Spiegel des Archivs" "${v:-Paperless/Spiegel}"
+		if rclone_has "$crypt"; then
+			info "Der verschluesselte Ordner bleibt $(env_get RCLONE_CRYPT_PATH): ein neuer"
+			info "Ort hiesse ein leeres Backup neben dem alten."
+		else
+			v="$(env_get RCLONE_CRYPT_PATH 2>/dev/null || true)"
+			rclone_ask_path RCLONE_CRYPT_PATH \
+				"Verschluesselte Sicherungen" "${v:-Paperless/Verschluesselt}"
+		fi
+		rclone_paths_apart && break
+		note "Die drei Ordner duerfen nicht gleich sein und nicht ineinander liegen."
+	done
+	# Nichts verschieben: der Spiegel entsteht beim naechsten Export neu, im
+	# Eingang liegt hoechstens, was noch nicht abgeholt war.
+	if [[ -n $old_inbox && $old_inbox != "$(env_get RCLONE_INBOX_PATH)" ]]; then
+		note "Im alten Eingang $old_inbox holt niemand mehr ab. Was dort noch liegt, bitte umlegen."
+	fi
+	if [[ -n $old_mirror && $old_mirror != "$(env_get RCLONE_MIRROR_PATH)" ]]; then
+		note "Der alte Spiegel $old_mirror bleibt liegen und kann in OneDrive geloescht werden."
+	fi
 	return 0
 }
 
@@ -1111,7 +1199,7 @@ rclone_crypt() {
 	fi
 	pw="$(gen_secret 32)"; salt="$(gen_secret 32)"
 	rclone_user config create "$crypt" crypt \
-		remote="$remote:Paperless/Verschluesselt" \
+		remote="$remote:$(env_get RCLONE_CRYPT_PATH)" \
 		filename_encryption=standard \
 		directory_name_encryption=true \
 		password="$pw" \
@@ -1126,11 +1214,10 @@ rclone_crypt() {
 }
 
 onedrive_setup() {
-	local remote crypt inbox userconf
+	local remote crypt inbox mirror userconf
 	rclone_install || { problem "rclone liess sich nicht installieren"; return 1; }
 	rclone_defaults
 	remote="$(env_get RCLONE_REMOTE)"; crypt="$(env_get RCLONE_REMOTE_CRYPT)"
-	inbox="$(env_get RCLONE_INBOX_PATH)"
 
 	# Halb eingerichtet: erst das Laufwerk nachtragen. Ist das Token dafuer
 	# schon abgelaufen, bleibt nur die neue Anmeldung.
@@ -1154,12 +1241,16 @@ onedrive_setup() {
 		ok "Bei OneDrive angemeldet"
 	fi
 
+	onedrive_paths "$crypt"
+	inbox="$(env_get RCLONE_INBOX_PATH)"; mirror="$(env_get RCLONE_MIRROR_PATH)"
+
 	rclone_crypt "$remote" "$crypt" || { problem "Verschluesseltes Remote nicht angelegt"; return 1; }
 	ok "Verschluesseltes Remote $crypt steht"
 
-	rclone_user mkdir "$remote:$inbox"     >>"$LOG" 2>&1
-	rclone_user mkdir "$remote:Paperless"  >>"$LOG" 2>&1
-	ok "Ordner $inbox/ und Paperless/ in OneDrive angelegt"
+	rclone_user mkdir "$remote:$inbox"  >>"$LOG" 2>&1
+	rclone_user mkdir "$remote:$mirror" >>"$LOG" 2>&1
+	rclone_user mkdir "$remote:$(env_get RCLONE_CRYPT_PATH)" >>"$LOG" 2>&1
+	ok "Ordner in OneDrive angelegt: $inbox/, $mirror/, $(env_get RCLONE_CRYPT_PATH)/"
 
 	# Die Timer laufen als root und finden die Konfiguration im Home des
 	# Benutzers nicht.
@@ -1805,6 +1896,29 @@ for _ in range(60):
 if state.get("status") != "completed":
     sys.exit("Installation %s" % (state.get("status") or "ohne Antwort"))
 PY
+# Liefert die Id eines Tags und legt ihn an, falls er fehlt.
+cat >"$API_TMP/tag.py" <<'PY'
+import json, sys, urllib.error, urllib.request
+
+base, key, label = sys.argv[1:4]
+
+def call(path, data=None):
+    req = urllib.request.Request(base + path)
+    req.add_header("X-Api-Key", key)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+        data = json.dumps(data).encode()
+    with urllib.request.urlopen(req, data, timeout=30) as r:
+        return json.loads(r.read() or "null")
+
+try:
+    for t in call("/tag") or []:
+        if t.get("label") == label:
+            print(t["id"]); raise SystemExit(0)
+    print(call("/tag", {"label": label})["id"])
+except urllib.error.URLError as e:
+    sys.exit("nicht erreichbar: %s" % e)
+PY
 US=$'\x1f'   # Trennzeichen fuer die Feldliste, kommt in Werten nicht vor
 
 arr_add() { python3 "$API_TMP/add.py" "$@" >>"$LOG" 2>&1; }
@@ -1996,6 +2110,26 @@ if [[ -n $PKEY ]] && api_ready 9696 v1 "$PKEY"; then
 		ok "Prowlarr an $APPS Apps angebunden"
 	elif (( APPS_DA )); then
 		ok "Prowlarr ist bereits angebunden"
+	fi
+fi
+
+# --- FlareSolverr in Prowlarr eintragen
+# Indexer hinter Cloudflare antworten Prowlarr sonst mit 403. Der Proxy
+# gilt nicht pauschal, sondern nur fuer Indexer mit dem passenden Tag -
+# deshalb wird der Tag hier gleich mit angelegt.
+if want flaresolverr && [[ -n $PKEY ]] && api_ready 9696 v1 "$PKEY"; then
+	PBASE="http://localhost:9696/api/v1"
+	ftag="$(python3 "$API_TMP/tag.py" "$PBASE" "$PKEY" flaresolverr 2>>"$LOG")"
+	if [[ $ftag =~ ^[0-9]+$ ]]; then
+		if arr_add "$PBASE" "$PKEY" indexerproxy FlareSolverr \
+			"{\"name\":\"FlareSolverr\",\"tags\":[$ftag]}" \
+			"host=http://flaresolverr:8191/"
+		then ok "FlareSolverr in Prowlarr eingetragen"
+		elif [[ $? == 3 ]]; then ok "FlareSolverr steht bereits in Prowlarr"
+		fi
+		info "Indexer hinter Cloudflare brauchen in Prowlarr den Tag \"flaresolverr\""
+	else
+		problem "Tag fuer FlareSolverr liess sich nicht anlegen"
 	fi
 fi
 

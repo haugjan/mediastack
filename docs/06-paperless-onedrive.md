@@ -36,9 +36,29 @@ OneDrive:/Scans ────── rclone move (runter, Quelle wird geleert) ─
                                                                           │
                                                                  document_exporter
                                                                           ▼
-OneDrive:/Paperless/Spiegel  ◄── rclone sync (Klartext) ───────────── export/
-OneDrive:/Paperless/Backup   ◄── rclone sync (verschluesselt) ───────── export/
+OneDrive:/Paperless/Spiegel        ◄── rclone sync (Klartext) ─────── export/
+OneDrive:/Paperless/Verschluesselt ◄── rclone sync (verschluesselt) ─ export/
 ```
+
+Die Ordnernamen sind Vorschläge. `setup.sh` fragt beim ersten Einrichten
+nach allen dreien, Enter übernimmt den Vorschlag. Bei jedem späteren Lauf
+zeigt es die aktuellen Ordner und fragt, ob du sie ändern willst. Zwei
+Grenzen gibt es dabei:
+
+- **Kein Ordner darf in einem anderen liegen.** Der Spiegel wird per
+  `rclone sync` abgeglichen und löscht alles, was nicht aus Paperless
+  kommt. Läge der Eingang darin, wären die Scans weg.
+- **Der verschlüsselte Ordner steht nach dem ersten Einrichten fest.** Sein
+  Ort ist Teil des Remotes `onedrive-crypt`. Ein neuer Ort hieße ein leeres
+  Backup neben dem alten.
+
+Wechselst du Eingang oder Spiegel, verschiebt das Skript nichts. Der neue
+Spiegel entsteht beim nächsten Export von selbst, den alten kannst du in
+OneDrive löschen. Im alten Eingang holt niemand mehr etwas ab.
+
+Im verschlüsselten Ordner liegen zwei Unterordner, in OneDrive nur als
+Zeichensalat zu sehen: `Paperless/Backup` für die Dokumente und
+`Mediastack/config` für die nächtliche Sicherung der App-Einstellungen.
 
 ## Einrichtung
 
@@ -53,7 +73,7 @@ Was das Skript selbst erledigt:
 | rclone installieren | aus der Paketquelle, bei zu alter Version über rclone.org |
 | Remote `onedrive` | startet die Anmeldung, du bestätigst im Browser |
 | Remote `onedrive-crypt` | Passwort und Salt erzeugt es selbst |
-| Ordner in OneDrive | `Scans/` und `Paperless/` |
+| Ordner in OneDrive | fragt nach Eingang, Spiegel und verschlüsseltem Ordner und legt sie an |
 | `/etc/rclone/rclone.conf` | Kopie für die Timer, Rechte `600` |
 | Die drei Timer | `enable --now`, passend zu dem, was du eingerichtet hast |
 
