@@ -720,7 +720,7 @@ azure_dns_setup() {
 	if [[ -n $appid ]]; then
 		info "Zugang '$sp_name' existiert bereits"
 		secret="$(env_get AZURE_CLIENT_SECRET 2>/dev/null || true)"
-		if [[ -z $secret ]] || ask_yn "Neues Passwort erzeugen?" n; then
+		if [[ -z $secret ]] || ask_yn "Neues Passwort erzeugen?" "${SECRET_BAD:-n}"; then
 			# --append legt ein weiteres Passwort an, statt alle bisherigen
 			# zu loeschen. Ohne das legte jeder Lauf mit leerer .env (ein
 			# zweiter Checkout, eine Neuinstallation) die laufende
@@ -842,6 +842,29 @@ azure_dns_setup() {
 # Taugen die Azure-Werte in der .env? Subscription, Tenant und Client
 # sind immer GUIDs. Ein Anzeigename wie "Default Directory (...)" an
 # ihrer Stelle heisst: von Hand falsch eingetragen, also neu einrichten.
+# Fragt bei Azure nach, ob das hinterlegte Passwort noch gilt. Die Form
+# allein sagt darueber nichts: ein zurueckgezogenes Secret sieht aus wie ein
+# gueltiges. Und der Fehler ist heimtueckisch - bestehende Zertifikate
+# laufen weiter, nur erneuern lassen sie sich nicht mehr. Das faellt erst
+# Monate spaeter auf, dann aber bei allen Namen gleichzeitig.
+azure_secret_ok() {
+	local tenant id secret answer
+	tenant="$(env_get AZURE_TENANT_ID 2>/dev/null || true)"
+	id="$(env_get AZURE_CLIENT_ID 2>/dev/null || true)"
+	secret="$(env_get AZURE_CLIENT_SECRET 2>/dev/null || true)"
+	[[ -n $tenant && -n $id && -n $secret ]] || return 1
+	answer="$(curl -sS --max-time 20 -X POST \
+		--data-urlencode "client_id=$id" \
+		--data-urlencode "client_secret=$secret" \
+		--data-urlencode "scope=https://management.azure.com/.default" \
+		--data-urlencode "grant_type=client_credentials" \
+		"https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" 2>>"$LOG")"
+	# Keine Antwort heisst "keine Ahnung", nicht "kaputt": ohne Netz soll
+	# hier nichts erneuert werden.
+	[[ -z $answer ]] && return 0
+	[[ $answer == *access_token* ]]
+}
+
 azure_env_valid() {
 	local k v guid='^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
 	for k in AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID AZURE_CLIENT_ID; do
@@ -864,7 +887,22 @@ if ! want domain; then
 elif azure_env_valid && [[ -n $BASE_DOMAIN ]]; then
 	USE_PROXY=1
 	ok "Schon eingerichtet fuer $BASE_DOMAIN"
-	if ask_yn "DNS-Eintraege neu setzen? (etwa weil sich deine Internet-Adresse geaendert hat)" n; then
+	if ! azure_secret_ok; then
+		SECRET_BAD=j
+		note "Azure lehnt das hinterlegte Passwort ab."
+		echo "  Damit kann Caddy keine DNS-Eintraege mehr setzen: neue Namen"
+		echo "  bekommen kein Zertifikat, und die bestehenden lassen sich nicht"
+		echo "  erneuern. Auffallen wuerde das erst in rund zwei Monaten, dann"
+		echo "  aber bei allen Namen auf einmal."
+		echo "  Haeufigste Ursache: setup.sh lief in einem zweiten Verzeichnis"
+		echo "  und hat den Zugang dort erneuert. Azure macht das alte Passwort"
+		echo "  dabei sofort ungueltig."
+		if ask_yn "Azure-Zugang jetzt erneuern?" j; then
+			azure_dns_setup || problem "Azure-Zugang konnte nicht erneuert werden"
+		else
+			problem "Azure-Passwort ist ungueltig, Zertifikate laufen aus"
+		fi
+	elif ask_yn "DNS-Eintraege neu setzen? (etwa weil sich deine Internet-Adresse geaendert hat)" n; then
 		azure_dns_setup || note "Nicht geaendert, die bisherigen Werte bleiben."
 	fi
 else
