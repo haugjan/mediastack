@@ -95,6 +95,16 @@ Priorität 25.
 Nach dem Speichern schiebt Prowlarr jeden Indexer automatisch in Sonarr,
 Radarr und Lidarr — die Verbindung dahin steht schon.
 
+**Indexer hinter Cloudflare**, 1337x zum Beispiel, antworten Prowlarr sonst
+nur mit `403`. Dafür läuft FlareSolverr mit, ein kopfloser Browser, der die
+Prüfung löst. Der Installer trägt ihn in Prowlarr ein und legt dabei den Tag
+`flaresolverr` an. Damit er für einen Indexer greift, muss dieser Indexer
+**denselben Tag tragen** — im Indexer unter *Tags* eintragen, sonst läuft die
+Abfrage weiter ohne ihn und scheitert.
+
+Der Dienst kostet ein paar hundert MB Arbeitsspeicher. Wer keine solchen
+Indexer nutzt, wählt ihn in der Auswahl am Anfang ab.
+
 ### 2. Overseerr anmelden
 
 `https://requests.example.com` öffnen und mit dem Plex-Konto anmelden. Sonarr

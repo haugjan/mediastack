@@ -114,6 +114,22 @@ services:
       - 8081:8080   # 8080 ist an gluetun vergeben
 
   # ============================================================= Indexer-Proxy
+  # Loest die Cloudflare-Pruefung fuer Indexer, die sonst nur 403 liefern
+  # (1337x zum Beispiel). Dahinter steckt ein kopfloser Browser, das kostet
+  # ein paar hundert MB RAM - deshalb ein eigener Dienst, den man abwaehlen
+  # kann. Prowlarr spricht ihn unter http://flaresolverr:8191 an; die
+  # Verbindung traegt setup.sh dort selbst ein.
+  flaresolverr:
+    <<: *base
+    image: ghcr.io/flaresolverr/flaresolverr:v3
+    container_name: flaresolverr
+    profiles: [flaresolverr]
+    environment:
+      TZ: ${TZ}
+      LOG_LEVEL: info
+    ports:
+      - 8191:8191
+
   prowlarr:
     <<: *base
     image: lscr.io/linuxserver/prowlarr:latest
