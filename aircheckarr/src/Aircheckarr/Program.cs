@@ -35,7 +35,14 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RecordingCoordinat
 
 var app = builder.Build();
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// "no-cache" heisst nicht "nie speichern", sondern "vor Gebrauch nachfragen".
+// Ohne die Angabe raet der Browser selbst, wie lange er app.css behalten
+// darf, und setzt nach einem Update das alte Stylesheet auf die neue Seite.
+// Die Nachfrage kostet dank ETag nur ein 304.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "no-cache",
+});
 
 // ------------------------------------------------------------------ Zustand
 
