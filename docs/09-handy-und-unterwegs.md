@@ -92,11 +92,31 @@ trifft er hier die privaten Adressen `192.168.x` oder `10.x`. Löst
 `home.lan.example.com` ins Nichts auf, obwohl der Eintrag stimmt, braucht
 deine Domain in der Router-Oberfläche eine Ausnahme.
 
-Wer keinen zweiten Satz Namen will, kann stattdessen im Router eine statische
-Route auf `100.64.0.0/10` über die Adresse des Servers setzen. Dann erreichen
-auch Geräte ohne Tailscale die normalen Namen, und es ändert sich nichts an
-der Konfiguration. Das setzt aber einen Router voraus, der statische Routen
-kann.
+### Die Alternative: eine statische Route
+
+Wer keinen zweiten Satz Namen will, setzt im Router stattdessen eine statische
+Route auf die **Tailscale-Adresse des Servers**. Dann erreichen auch Geräte
+ohne Tailscale die ganz normalen Namen, und an der Konfiguration des Stacks
+ändert sich nichts.
+
+Bei einer FritzBox unter *Heimnetz → Netzwerk → Netzwerkeinstellungen →
+Statische Routingtabelle → IPv4-Routen*:
+
+| Feld | Wert | Beispiel |
+|---|---|---|
+| Netzwerk | die Tailscale-Adresse des Servers | `100.93.123.100` |
+| Subnetzmaske | `255.255.255.255` | |
+| Gateway | die LAN-Adresse des Servers | `192.168.178.98` |
+
+**Nur diese eine Adresse, nicht `100.64.0.0/10`.** Eine Route über den ganzen
+Tailnet-Bereich schickt allen Tailnet-Verkehr zum Server, und der leitet nicht
+weiter — die übrigen Geräte im Tailnet wären vom Heimnetz aus dann gar nicht
+mehr erreichbar.
+
+Zwei Dinge lassen die Route ins Leere zeigen: eine neue LAN-Adresse des
+Servers (deshalb im Router eine feste Zuordnung vergeben) und eine neue
+Tailscale-Adresse nach einer Neuanmeldung. Beides fällt sofort auf, weil dann
+im Heimnetz gar nichts mehr geht, unterwegs aber alles.
 
 ## Apps, die sich lohnen
 
