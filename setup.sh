@@ -378,6 +378,7 @@ mkdir -p \
 	"$DATA_ROOT"/usenet/complete/{movies,tv,music,books} \
 	"$DATA_ROOT"/media/{movies,tv,music,audiobooks,books} \
 	"$DATA_ROOT"/youtube \
+	"$DATA_ROOT"/aircheck \
 	"$DATA_ROOT"/paperless/{data,media,consume,export}
 chown -R "$MEDIA_USER":"$MEDIA_GROUP" "$DATA_ROOT" 2>>"$LOG"
 find "$DATA_ROOT" -type d -exec chmod 2775 {} + 2>>"$LOG"
@@ -1357,7 +1358,12 @@ if (( USE_TORRENT )) && [[ -z $(env_get QBIT_PASS 2>/dev/null || true) ]]; then
 		note "qBittorrent-Passwort nicht gesetzt. Von Hand: docs/02-inbetriebnahme.md"
 	fi
 fi
-(( FOUND )) && docker compose up -d --force-recreate recyclarr unpackerr backfill homepage >>"$LOG" 2>&1
+# Diese Dienste bekommen die Schluessel per Umgebungsvariable und lesen sie
+# nur beim Start. aircheckarr nur, wenn das Profil laeuft: ein Dienst ohne
+# aktives Profil laesst sich nicht neu starten.
+RECREATE=(recyclarr unpackerr backfill homepage)
+(( USE_RADIO )) && RECREATE+=(aircheckarr)
+(( FOUND )) && docker compose up -d --force-recreate "${RECREATE[@]}" >>"$LOG" 2>&1
 
 # =========================================================================
 # Apps untereinander verkabeln
@@ -1859,10 +1865,10 @@ KUMA_DB="$REPO_DIR/config/uptime-kuma/kuma.db"
 if [[ -f $KUMA_DB ]]; then
 	docker compose stop uptime-kuma >>"$LOG" 2>&1
 	KUMA_OUT="$(python3 - "$KUMA_DB" "${LAN_IP:-127.0.0.1}" \
-		"$USE_TORRENT" "$USE_USENET" "$USE_DOCS" 2>>"$LOG" <<'PY'
+		"$USE_TORRENT" "$USE_USENET" "$USE_DOCS" "$USE_RADIO" 2>>"$LOG" <<'PY'
 import json, sqlite3, sys
 
-db, lan, torrent, usenet, docs = sys.argv[1:6]
+db, lan, torrent, usenet, docs, radio = sys.argv[1:7]
 
 # Name, Adresse. Die Adressen sind containerintern, Kuma haengt im selben
 # Netz. Plex laeuft im Host-Netz und ist nur ueber die LAN-Adresse zu
@@ -1888,6 +1894,8 @@ if usenet == "1":
     mon.append(("Usenet", "http://sabnzbd:8080/"))
 if docs == "1":
     mon.append(("Dokumente", "http://paperless:8000/"))
+if radio == "1":
+    mon.append(("Radiomitschnitt", "http://aircheckarr:8099/health"))
 
 c = sqlite3.connect(db)
 row = c.execute("select id from user order by id limit 1").fetchone()
@@ -2010,6 +2018,11 @@ printf '  %d. Navidrome im Browser oeffnen und das Admin-Konto anlegen.\n' $((n+
 if [[ -z $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]]; then
 	printf '  %d. Musik ueber YouTube braucht einen kostenlosen Spotify-Zugang.\n' $((n++))
 	printf '     Anlegen, dann sudo ./setup.sh nochmal starten. docs/08-musik.md\n'
+fi
+if (( USE_RADIO )); then
+	printf '  %d. Im Radiomitschnitt Sender holen und Wuensche eintragen.\n' $((n++))
+	printf '     Ohne offene Wuensche hoert der Dienst gar nicht erst zu.\n'
+	printf '     Anleitung: docs/10-radiomitschnitt.md\n'
 fi
 (( ! USE_TORRENT )) && printf '  %d. Torrents spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
 (( ! USE_DOCS ))    && printf '  %d. Paperless spaeter dazu: sudo ./setup.sh nochmal starten.\n' $((n++))
