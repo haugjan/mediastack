@@ -549,6 +549,8 @@ services:
     environment:
       BASE_DOMAIN: ${BASE_DOMAIN}
       TAILSCALE_IP: ${TAILSCALE_IP}
+      # Grenzt die *.lan-Namen auf Port 8443 auf das eigene Netz ein.
+      LAN_SUBNET: ${LAN_SUBNET}
       ACME_EMAIL: ${ACME_EMAIL}
       AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID}
       AZURE_RESOURCE_GROUP_NAME: ${AZURE_RESOURCE_GROUP_NAME}

@@ -39,6 +39,65 @@ Das muss in einen Verbindungsfehler laufen. Kommt eine Paperless-Seite, stimmt
 etwas nicht, dann `TAILSCALE_IP` in der `.env` und `network_mode: host` beim
 Caddy-Container prüfen.
 
+## Im Heimnetz ohne Tailscale
+
+Nicht auf jedem Gerät läuft Tailscale: Fernseher, Spielkonsole, der Laptop
+von Besuch. Für die gibt es dieselben Dienste ein zweites Mal, unter eigenen
+Namen und auf einem eigenen Port:
+
+```
+https://home.lan.example.com:8443
+https://paperless.lan.example.com:8443
+https://sonarr.lan.example.com:8443
+```
+
+Das Muster ist immer `<name>.lan.<domain>:8443`, mit denselben Namen wie
+oben. Echtes Zertifikat, keine Browserwarnung, kein VPN.
+
+**Warum ein anderer Port, und nicht einfach Port 443?** Weil der Router 80
+und 443 auf genau diesen Rechner weiterleitet. Läge der Heimnetz-Zugang auf
+443, wäre er über die Portweiterleitung auch aus dem Internet erreichbar —
+der Listener existiert dann ja. 8443 leitet der Router nicht weiter, damit
+bleibt es bei zwei Riegeln. Genau das prüft auch die CI: verschiebt jemand
+den Block auf 443, schlägt sie an.
+
+Der zweite Riegel ist hier enger gefasst als bei den Tailscale-Namen:
+durchgelassen wird nur dein eigenes Subnetz, nicht jeder private
+Adressbereich. Das zählt, sobald der Rechner ein Notebook ist, das auch mal
+in einem Café-WLAN steht — dort gilt `10.x` oder `192.168.x` genauso, und
+ohne diese Einschränkung käme die halbe Kaffeehaus-Gesellschaft an dein
+Dokumentenarchiv.
+
+Aus demselben Grund bindet Caddy diesen Zugang an **keine feste Adresse**.
+Täte es das, würde der ganze Proxy nicht mehr starten, sobald das Notebook in
+einem anderen Netz hängt: die Adresse gibt es dann nicht. So lauscht er
+überall und antwortet außerhalb deines Netzes mit 403.
+
+Einrichten musst du nichts, `setup.sh` legt beides an — den DNS-Eintrag
+`*.lan` auf die Adresse des Servers und den passenden Block in Caddy.
+
+Zwei Dinge, die dabei schiefgehen können:
+
+**Die Adresse des Servers muss bleiben.** Der Eintrag zeigt auf die
+LAN-Adresse, die der Server beim Einrichten hatte. Vergib im Router eine
+feste Zuordnung (DHCP-Reservierung), sonst zeigt der Eintrag nach einem
+Neustart ins Leere, und ein erneutes `sudo ./setup.sh` muss ihn richtigstellen.
+
+Läufst du `setup.sh` unterwegs, merkt es das: Hat sich die lokale Adresse seit
+dem letzten Lauf geändert, fragt es nach, ob das die Heimnetz-Adresse ist.
+Sagst du nein, bleiben Adresse, Subnetz und der `*.lan`-Eintrag unangetastet.
+
+**Der DNS-Rebind-Schutz.** Derselbe Filter wie unten beim CGNAT-Bereich, nur
+trifft er hier die privaten Adressen `192.168.x` oder `10.x`. Löst
+`home.lan.example.com` ins Nichts auf, obwohl der Eintrag stimmt, braucht
+deine Domain in der Router-Oberfläche eine Ausnahme.
+
+Wer keinen zweiten Satz Namen will, kann stattdessen im Router eine statische
+Route auf `100.64.0.0/10` über die Adresse des Servers setzen. Dann erreichen
+auch Geräte ohne Tailscale die normalen Namen, und es ändert sich nichts an
+der Konfiguration. Das setzt aber einen Router voraus, der statische Routen
+kann.
+
 ## Apps, die sich lohnen
 
 | Dienst | Android | iOS |

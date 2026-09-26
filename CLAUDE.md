@@ -51,6 +51,19 @@ dass am öffentlichen Interface für private Namen gar kein Listener existiert,
 `requests.<domain>` (Overseerr).** Das ist keine Stilfrage, die CI stellt es
 fest.
 
+Dazu kommt ein dritter Listener für Geräte im Haus ohne Tailscale:
+`*.lan.<domain>` auf **Port 8443**, und der ist wieder zweistufig abgesichert.
+Erstens der Port: der Router leitet nur 80 und 443 weiter, 8443 also nicht.
+Zweitens `home_only`, das nur `{$LAN_SUBNET}` durchlässt — enger als
+`private_only`, weil ein Notebook auch mal in einem fremden WLAN steht und
+dort derselbe private Adressbereich gilt.
+
+Dieser Block bindet bewusst an **keine** feste Adresse. Eine Bindung an die
+LAN-Adresse wäre strenger, macht Caddy aber unstartbar, sobald der Rechner in
+einem anderen Netz hängt: die Adresse gibt es dann nicht mehr, und der ganze
+Proxy landet in der Neustartschleife. Die CI prüft beides — dass dieser
+Listener auf 8443 sitzt und dass er nur das eigene Subnetz durchlässt.
+
 ## Compose-Profile
 
 `COMPOSE_PROFILES` in der `.env` entscheidet, was überhaupt startet;

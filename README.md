@@ -123,6 +123,7 @@ Der Schnitt ist nicht drinnen gegen draußen, sondern **wer** zugreift.
 |---|---|---|
 | Familie und Freunde | Wünsche eintragen, Filme schauen | Overseerr öffentlich, Plex über seine eigenen Server |
 | nur du | alles andere | Tailscale, ohne offenen Port am Router |
+| Geräte im Haus ohne Tailscale | alles andere | `https://<name>.lan.example.com:8443` |
 
 Mit einer Domain bei Azure DNS bekommt jeder Dienst eine eigene Adresse mit
 echtem Zertifikat, auch die, die aus dem Internet gar nicht erreichbar sind.
@@ -134,6 +135,13 @@ an die Tailscale-Adresse, am öffentlichen Interface existiert für sie also gar
 kein Listener. Dazu kommt eine `remote_ip`-Prüfung. Ein DNS-Eintrag allein
 hätte nicht genügt, weil jemand mit Kenntnis deiner Heim-IP sonst einfach
 `Host: paperless.deine-domain.ch` an Port 443 schicken könnte.
+
+Für Geräte, auf denen kein Tailscale läuft — Fernseher, Konsole, Besuch —
+gibt es dieselben Dienste noch einmal unter `<name>.lan.example.com`, aber auf
+**Port 8443**. Der Port ist dabei der Schutz, nicht der Name: Am Router sind
+nur 80 und 443 weitergeleitet, 8443 also nicht, und damit bleibt dieser Zugang
+im Haus. Stünde er auf 443, wäre er über die Portweiterleitung von außen
+erreichbar, und von den zwei Ebenen bliebe nur eine.
 
 Ohne Domain erreichst du alles über `http://<ip>:<port>`. Funktioniert
 genauso, sieht nur weniger schön aus.

@@ -50,6 +50,17 @@
 	}
 }
 
+# Fuer den Heimnetz-Zugang: nur das eigene Netz, nicht jeder private
+# Bereich. Der Unterschied zaehlt, sobald der Rechner ein Notebook ist, das
+# auch mal in einem fremden WLAN steht - dort kaeme man sonst aus demselben
+# Adressbereich heran.
+(home_only) {
+	@fremd not remote_ip {$LAN_SUBNET} 127.0.0.1/32
+	respond @fremd "Not available" 403 {
+		close
+	}
+}
+
 # Caddy laeuft im Host-Netz, spricht Upstreams also ueber 127.0.0.1 an.
 (private_app) {
 	bind {$TAILSCALE_IP}
@@ -57,6 +68,64 @@
 	import private_only
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:{args[0]}
+}
+
+# ================================================== HEIMNETZ OHNE TAILSCALE
+# Dieselben Dienste noch einmal, unter eigenen Namen und auf einem eigenen
+# Port. Gedacht fuer Geraete im WLAN, auf denen kein Tailscale laeuft:
+# Fernseher, Konsole, Besuch.
+#
+# Der Port ist hier der Schutz, nicht der Name. Am Router sind 80 und 443
+# weitergeleitet, deshalb darf hier NICHT 443 stehen. Stuende es da, waere
+# dieser Listener ueber die Portweiterleitung auch aus dem Internet
+# erreichbar. Auf 8443 bleiben es zwei Riegel: kein Listener am
+# weitergeleiteten Port, und die Pruefung auf das eigene Subnetz.
+#
+# Dieser Block bindet bewusst an KEINE feste Adresse. Eine Bindung an die
+# LAN-Adresse waere strenger, aber sie macht Caddy unstartbar, sobald der
+# Rechner in einem anderen Netz haengt: die Adresse gibt es dann nicht mehr,
+# und der ganze Proxy landet in der Neustartschleife. Stattdessen lauscht er
+# ueberall und laesst per home_only nur das eigene Subnetz durch. Im fremden
+# WLAN antwortet er dort mit 403, statt gar nicht zu starten.
+#
+# Die Namen zeigen im DNS auf die LAN-Adresse des Servers, den Eintrag
+# *.lan setzt setup.sh in Schritt 5 mit. Ein Wildcard-Zertifikat deckt sie
+# alle ab, ausgestellt wie alle anderen ueber DNS-01.
+#
+# Die Zuordnung Name -> Port steht als Tabelle da, mit dem vollen Hostnamen
+# statt einer Beschriftungsnummer: eine Domain kann aus zwei Teilen bestehen
+# (example.com) oder aus dreien (example.co.uk), und ein Zaehlen von rechts
+# waere im zweiten Fall still falsch.
+*.lan.{$BASE_DOMAIN}:8443 {
+	import sane_headers
+	import home_only
+	encode zstd gzip
+
+	map {host} {upstream} {
+		requests.lan.{$BASE_DOMAIN} 5055
+		paperless.lan.{$BASE_DOMAIN} 8000
+		music.lan.{$BASE_DOMAIN} 4533
+		books.lan.{$BASE_DOMAIN} 13378
+		radio.lan.{$BASE_DOMAIN} 8099
+		home.lan.{$BASE_DOMAIN} 3000
+		sonarr.lan.{$BASE_DOMAIN} 8989
+		radarr.lan.{$BASE_DOMAIN} 7878
+		lidarr.lan.{$BASE_DOMAIN} 8686
+		prowlarr.lan.{$BASE_DOMAIN} 9696
+		bazarr.lan.{$BASE_DOMAIN} 6767
+		qbit.lan.{$BASE_DOMAIN} 8080
+		sab.lan.{$BASE_DOMAIN} 8081
+		status.lan.{$BASE_DOMAIN} 3001
+		disks.lan.{$BASE_DOMAIN} 8082
+		clean.lan.{$BASE_DOMAIN} 11011
+		stats.lan.{$BASE_DOMAIN} 8181
+		default 0
+	}
+	# Ohne diesen Riegel landet jeder unbekannte Name auf Port 0.
+	@unbekannt vars {upstream} 0
+	respond @unbekannt "Unbekannter Dienst" 404
+
+	reverse_proxy 127.0.0.1:{upstream}
 }
 
 # ============================================================== OEFFENTLICH

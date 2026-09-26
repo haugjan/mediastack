@@ -121,16 +121,21 @@ Das `password` wird genau einmal angezeigt. Gleich in den Passwortmanager.
 
 ## Von Hand, Schritt 2: DNS-Records setzen
 
-Zwei Records, und die Reihenfolge der Spezifität erledigt den Rest: ein
+Drei Records, und die Reihenfolge der Spezifität erledigt den Rest: ein
 expliziter Record schlägt im DNS immer den Wildcard.
 
 ```bash
 TS_IP=$(tailscale ip -4 | head -1)
+LAN_IP=$(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
 PUBLIC_IP=$(curl -s https://ipinfo.io/ip)
 
 # Alles Private: Wildcard auf die Tailscale-Adresse
 az network dns record-set a add-record \
   -g "$RG" -z example.com -n "*" -a "$TS_IP"
+
+# Dieselben Dienste fuers Heimnetz, auf die LAN-Adresse
+az network dns record-set a add-record \
+  -g "$RG" -z example.com -n "*.lan" -a "$LAN_IP"
 
 # Die eine oeffentliche Ausnahme
 az network dns record-set a add-record \
@@ -140,9 +145,17 @@ az network dns record-set a add-record \
 Prüfen:
 
 ```bash
-dig +short paperless.example.com    # -> 100.x.y.z
-dig +short requests.example.com     # -> deine oeffentliche IP
+dig +short paperless.example.com      # -> 100.x.y.z
+dig +short paperless.lan.example.com  # -> 192.168.x.y
+dig +short requests.example.com       # -> deine oeffentliche IP
 ```
+
+Dass hier eine **private Adresse im öffentlichen DNS** steht, ist Absicht und
+harmlos: Wer sie auflöst, kann mit ihr nur etwas anfangen, wenn er ohnehin im
+selben Netz steht. Der Preis ist ein bekannter Fallstrick — viele Router
+filtern private Adressen aus DNS-Antworten heraus, als Schutz vor
+DNS-Rebinding. Dann braucht `example.com` in der Router-Oberfläche eine
+Ausnahme, bei der Fritz!Box unter *Netzwerkeinstellungen → DNS-Rebind-Schutz*.
 
 ## Schritt 3: Wechselnde Heim-IP (betrifft auch die Automatik)
 
@@ -220,6 +233,7 @@ Paperless-Seite, ist `bind` nicht aktiv und du solltest `TAILSCALE_IP` in der
 | `sonarr` `radarr` `lidarr` `prowlarr` `bazarr` | *arr-Apps | Tailnet |
 | `qbit` `sab` | Download-Clients | Tailnet |
 | `status` `disks` `clean` `stats` | Betrieb | Tailnet |
+| `*.lan.example.com:8443` | dieselben Dienste | nur im Heimnetz |
 
 Plex fehlt hier bewusst. Ein Reverse Proxy davor bringt nichts, weil Plex
 seinen Fernzugriff selbst löst, und er kann Direct Play stören.

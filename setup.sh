@@ -22,6 +22,9 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$REPO_DIR/setup.log"
 MEDIA_USER="media"
+# 1, wenn der Rechner gerade nicht im Heimnetz steht. Dann bleiben LAN_IP,
+# LAN_SUBNET und der DNS-Eintrag *.lan unangetastet.
+AWAY=0
 MEDIA_GROUP="media"
 PROBLEMS=()
 
@@ -445,6 +448,23 @@ LAN_IP="$(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | hea
 LAN_SUBNET="$(ip -o -4 route show to default | awk '{print $3}' | head -1 | sed 's/\.[0-9]*$/.0\/24/')"
 ok "Lokale Adresse: ${LAN_IP:-unbekannt}"
 
+# Auf einem Notebook ist die erkannte Adresse nicht zwingend die von zu
+# Hause. Daran haengen aber der Heimnetz-Zugang, der DNS-Eintrag *.lan und
+# die Freigabe in Caddy. Wird das im Cafe ueberschrieben, sperrt man sich zu
+# Hause aus und laesst dafuer das fremde Netz herein. Gefragt wird nur, wenn
+# sich die Adresse seit dem letzten Lauf geaendert hat.
+LAN_OLD="$(env_get LAN_IP 2>/dev/null || true)"
+SUBNET_OLD="$(env_get LAN_SUBNET 2>/dev/null || true)"
+if [[ -n $LAN_OLD && $LAN_OLD != 127.0.0.1 && $LAN_OLD != "$LAN_IP" ]]; then
+	note "Beim letzten Lauf war die Adresse $LAN_OLD, jetzt ist sie $LAN_IP."
+	echo "  Bist du gerade woanders (Cafe, Buero, fremdes WLAN), sag hier nein."
+	echo "  Dann bleiben die Heimnetz-Einstellungen so, wie sie sind."
+	if ! ask_yn "Ist $LAN_IP deine Adresse im Heimnetz?" j; then
+		LAN_IP="$LAN_OLD"; LAN_SUBNET="$SUBNET_OLD"; AWAY=1
+		info "Heimnetz bleibt bei $LAN_IP ($LAN_SUBNET)"
+	fi
+fi
+
 # =========================================================================
 # 5. Eigene Web-Adressen, vollautomatisch ueber Azure DNS
 # =========================================================================
@@ -584,8 +604,9 @@ azure_dns_setup() {
 	local pub
 	pub="$(curl -fsS --max-time 10 https://ipinfo.io/ip 2>/dev/null | tr -d '[:space:]')"
 	echo
-	echo "  Ich setze zwei Arten von Eintraegen:"
+	echo "  Ich setze drei Arten von Eintraegen:"
 	printf '    *.%-28s -> %s   (nur ueber Tailscale)\n' "$BASE_DOMAIN" "$TS_IP"
+	printf '    *.lan.%-24s -> %s   (nur im Heimnetz)\n' "$BASE_DOMAIN" "${LAN_IP:-keine}"
 	printf '    requests.%-21s -> %s   (oeffentlich)\n' "$BASE_DOMAIN" "${pub:-unbekannt}"
 	echo
 	echo "  Ein genauer Eintrag schlaegt im DNS immer den Platzhalter. Deshalb"
@@ -595,6 +616,26 @@ azure_dns_setup() {
 	dns_set_a "*" "$TS_IP" \
 		&& ok "*.${BASE_DOMAIN} zeigt auf $TS_IP" \
 		|| { problem "Platzhalter-Eintrag fehlgeschlagen, siehe setup.log"; return 1; }
+
+	# Fuer Geraete im WLAN ohne Tailscale. Der Eintrag zeigt bewusst auf eine
+	# private Adresse: erreichbar ist sie nur, wer ohnehin im Heimnetz steht.
+	# Caddy bedient diese Namen auf Port 8443, den der Router nicht
+	# weiterleitet. Manche Router filtern private Adressen aus DNS-Antworten
+	# heraus ("DNS-Rebind-Schutz"), dann braucht die Domain dort eine Ausnahme.
+	# Auch beim ersten Lauf nachfragen: gibt es noch keine gespeicherte
+	# Adresse, kann die Pruefung weiter oben nicht greifen, und im fremden
+	# WLAN landet sonst eine falsche Adresse im oeffentlichen DNS.
+	if (( AWAY )); then
+		info "Nicht im Heimnetz, *.lan bleibt unveraendert"
+	elif [[ -z ${LAN_IP:-} ]]; then
+		note "Keine lokale Adresse erkannt, *.lan wird nicht gesetzt"
+	elif ask_yn "Heimnetz-Zugang auf $LAN_IP einrichten? (nur wenn das deine Adresse zu Hause ist)" j; then
+		dns_set_a "*.lan" "$LAN_IP" \
+			&& ok "*.lan.${BASE_DOMAIN} zeigt auf $LAN_IP" \
+			|| problem "Eintrag *.lan fehlgeschlagen, siehe setup.log"
+	else
+		info "Kein *.lan-Eintrag. Zu Hause nochmal starten, dann wird er gesetzt."
+	fi
 
 	if [[ -n $pub ]]; then
 		if ask_yn "requests.${BASE_DOMAIN} oeffentlich anlegen? (damit Familie und Freunde Wuensche eintragen koennen)" j; then
@@ -1065,6 +1106,8 @@ env_set DATA_ROOT "$DATA_ROOT"
 env_set PAPERLESS_ROOT "$DATA_ROOT/paperless"
 env_set LAN_SUBNET "${LAN_SUBNET:-192.168.1.0/24}"
 env_set TAILSCALE_IP "${TS_IP:-127.0.0.1}"
+# Caddy bindet die *.lan-Namen daran. Ein leerer Wert waere ein Startfehler.
+env_set LAN_IP "${LAN_IP:-127.0.0.1}"
 [[ -z $(env_get DOCKER_SUBNET) ]] && env_set DOCKER_SUBNET "172.28.0.0/16"
 [[ -z $(env_get VPN_COUNTRIES) ]] && env_set VPN_COUNTRIES "Switzerland"
 [[ -z $(env_get QBIT_USER) ]] && env_set QBIT_USER "admin"
@@ -1091,7 +1134,7 @@ env_set COMPOSE_PROFILES "$PROF_STR"
 ok "Aktive Bereiche: ${PROF_STR:-nur Grundausstattung}"
 
 if [[ -n $BASE_DOMAIN ]]; then
-	env_set HOMEPAGE_ALLOWED_HOSTS "localhost:3000,homepage:3000,$LAN_IP:3000,home.$BASE_DOMAIN"
+	env_set HOMEPAGE_ALLOWED_HOSTS "localhost:3000,homepage:3000,$LAN_IP:3000,home.$BASE_DOMAIN,home.lan.$BASE_DOMAIN:8443"
 else
 	env_set HOMEPAGE_ALLOWED_HOSTS "localhost:3000,homepage:3000,$LAN_IP:3000,${TS_IP:-127.0.0.1}:3000"
 fi
@@ -1988,6 +2031,16 @@ printf '  %-22s %s\n' "Wuensche"    "$(url_for overseerr)"
 (( USE_TORRENT )) && printf '  %-22s %s\n' "Torrents"  "$(url_for qbittorrent)"
 (( USE_USENET ))  && printf '  %-22s %s\n' "Usenet"    "$(url_for sabnzbd)"
 (( USE_RADIO ))   && printf '  %-22s %s\n' "Radiomitschnitt" "$(url_for aircheckarr)"
+
+# Zweiter Weg fuer Geraete im WLAN, die kein Tailscale koennen.
+if (( USE_PROXY )) && [[ -n ${LAN_IP:-} && $LAN_IP != 127.0.0.1 ]]; then
+	printf '\n%sIm WLAN auch ohne Tailscale%s (Fernseher, Konsole, Besuch)\n' "$B" "$N"
+	printf '  Dieselben Dienste unter  https://<name>.lan.%s:8443\n' "$BASE_DOMAIN"
+	printf '  also zum Beispiel        https://home.lan.%s:8443\n' "$BASE_DOMAIN"
+	printf '  %sPort 8443 ist Absicht%s: den leitet der Router nicht weiter, deshalb\n' "$D" "$N"
+	printf '  bleibt dieser Zugang im Haus. Filtert dein Router private Adressen\n'
+	printf '  aus DNS-Antworten, braucht %s dort eine Ausnahme.\n' "$BASE_DOMAIN"
+fi
 
 if (( USE_DOCS )) && [[ -n ${PW:-} ]]; then
 	printf '\n%sPaperless-Zugang%s (steht auch in .env)\n' "$B" "$N"

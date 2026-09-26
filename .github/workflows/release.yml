@@ -137,7 +137,7 @@ jobs:
           docker build -q -t caddy-test ./caddy
           docker run --rm \
             -e BASE_DOMAIN=example.ch -e TAILSCALE_IP=100.100.100.100 \
-            -e ACME_EMAIL=test@example.ch \
+            -e LAN_SUBNET=192.168.178.0/24 -e ACME_EMAIL=test@example.ch \
             -e AZURE_SUBSCRIPTION_ID=s -e AZURE_RESOURCE_GROUP_NAME=r \
             -e AZURE_TENANT_ID=t -e AZURE_CLIENT_ID=c -e AZURE_CLIENT_SECRET=x \
             -v "$PWD/caddy:/cfg:ro" \
@@ -149,26 +149,53 @@ jobs:
           # duerfen ausschliesslich auf der Tailscale-Adresse lauschen.
           docker run --rm \
             -e BASE_DOMAIN=example.ch -e TAILSCALE_IP=100.100.100.100 \
-            -e ACME_EMAIL=test@example.ch \
+            -e LAN_SUBNET=192.168.178.0/24 -e ACME_EMAIL=test@example.ch \
             -e AZURE_SUBSCRIPTION_ID=s -e AZURE_RESOURCE_GROUP_NAME=r \
             -e AZURE_TENANT_ID=t -e AZURE_CLIENT_ID=c -e AZURE_CLIENT_SECRET=x \
             -v "$PWD/caddy:/cfg:ro" \
             caddy-test caddy adapt --config /cfg/Caddyfile 2>/dev/null \
           | python3 -c "
           import json, sys
+          TS, SUB = '100.100.100.100', '192.168.178.0/24'
           srv = json.load(sys.stdin)['apps']['http']['servers']
-          public, private = set(), set()
+
+          def ranges(o, out=None):
+              # remote_ip-Bereiche irgendwo im Baum einsammeln
+              out = [] if out is None else out
+              if isinstance(o, dict):
+                  if 'remote_ip' in o: out += o['remote_ip'].get('ranges', [])
+                  for v in o.values(): ranges(v, out)
+              elif isinstance(o, list):
+                  for v in o: ranges(v, out)
+              return out
+
+          public, tailnet, heimnetz = set(), set(), set()
           for s in srv.values():
               hosts = {h for r in s.get('routes', []) for m in r.get('match', [])
                        for h in m.get('host', [])}
-              bound_to_tailnet = all(l.startswith('100.100.100.100') for l in s['listen'])
-              (private if bound_to_tailnet else public).update(hosts)
+              ports = {l.rsplit(':', 1)[1] for l in s['listen']}
+              if all(l.startswith(TS + ':') for l in s['listen']):
+                  tailnet |= hosts
+              elif ports == {'8443'}:
+                  # Zweiter Riegel des Heimnetz-Zugangs: nur das eigene Netz.
+                  # Steht der Rechner in einem fremden WLAN, kaeme man sonst
+                  # aus demselben privaten Bereich heran.
+                  assert sorted(set(ranges(s))) == ['127.0.0.1/32', SUB], \
+                      f'Heimnetz laesst {sorted(set(ranges(s)))} durch'
+                  heimnetz |= hosts
+              else:
+                  public |= hosts
           print('oeffentlich:', sorted(public))
-          print('privat     :', len(private), 'Namen')
+          print('tailnet    :', len(tailnet), 'Namen')
+          print('heimnetz   :', sorted(heimnetz))
+          # Der erste Riegel: der Heimnetz-Zugang darf nicht auf 443 liegen.
+          # Laege er dort, stuende er hier unter 'oeffentlich', weil der
+          # Router genau diesen Port weiterleitet.
           assert public == {'requests.example.ch'}, f'Unerwartet oeffentlich: {public}'
+          assert heimnetz == {'*.lan.example.ch'}, f'Unerwartet im Heimnetz: {heimnetz}'
           for name in ('paperless', 'music', 'sonarr', 'qbit'):
-              assert f'{name}.example.ch' in private, f'{name} ist nicht privat'
-          print('OK   nur Overseerr ist oeffentlich erreichbar')
+              assert f'{name}.example.ch' in tailnet, f'{name} ist nicht privat'
+          print('OK   nur Overseerr oeffentlich, Heimnetz auf 8443 und nur im eigenen Netz')
           "
 
       - name: Dashboard-Vorlage ergibt gueltiges YAML
