@@ -720,9 +720,15 @@ azure_dns_setup() {
 	if [[ -n $appid ]]; then
 		info "Zugang '$sp_name' existiert bereits"
 		secret="$(env_get AZURE_CLIENT_SECRET 2>/dev/null || true)"
-		if [[ -z $secret ]] || ask_yn "Neues Passwort erzeugen? (das alte wird ungueltig)" n; then
-			secret="$(az ad app credential reset --id "$appid" --query password -o tsv \
-				--only-show-errors 2>>"$LOG")" \
+		if [[ -z $secret ]] || ask_yn "Neues Passwort erzeugen?" n; then
+			# --append legt ein weiteres Passwort an, statt alle bisherigen
+			# zu loeschen. Ohne das legte jeder Lauf mit leerer .env (ein
+			# zweiter Checkout, eine Neuinstallation) die laufende
+			# Installation still lahm: Caddy bekaeme fuer keinen neuen Namen
+			# mehr ein Zertifikat, und die alten laufen nur noch bis zum Ablauf.
+			secret="$(az ad app credential reset --id "$appid" --append \
+				--display-name "mediastack $(hostname -s) $(date +%Y-%m-%d)" \
+				--query password -o tsv --only-show-errors 2>>"$LOG")" \
 				|| { problem "Neues Passwort konnte nicht erzeugt werden"; return 1; }
 			ok "neues Passwort erzeugt"
 		else
