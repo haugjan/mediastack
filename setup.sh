@@ -631,6 +631,12 @@ dns_set_a() {
 		-a "$ip" --ttl 300 --subscription "$AZ_SUB" --only-show-errors >>"$LOG" 2>&1
 }
 
+# Entfernt einen genauen Eintrag wieder, damit der Platzhalter greift.
+dns_del_a() {
+	az network dns record-set a delete -g "$AZ_RG" -z "$BASE_DOMAIN" -n "$1" \
+		--subscription "$AZ_SUB" -y --only-show-errors >>"$LOG" 2>&1
+}
+
 # Anmeldung per Geraetecode, damit es auch per SSH ohne Browser geht.
 # Bewusst NICHT ins Log umgeleitet: du musst Link und Code sehen.
 # Die neuere az-Anmeldung fragt danach selbst nach Tenant und Subscription.
@@ -754,16 +760,13 @@ azure_dns_setup() {
 
 	# --------------------------------------------------------- Adressen
 	[[ -n $TS_IP ]] || { problem "Ohne Tailscale-Adresse kann ich die privaten Namen nicht setzen"; return 1; }
-	local pub
-	pub="$(curl -fsS --max-time 10 https://ipinfo.io/ip 2>/dev/null | tr -d '[:space:]')"
 	echo
-	echo "  Ich setze drei Arten von Eintraegen:"
+	echo "  Ich setze zwei Arten von Eintraegen:"
 	printf '    *.%-28s -> %s   (nur ueber Tailscale)\n' "$BASE_DOMAIN" "$TS_IP"
 	printf '    *.lan.%-24s -> %s   (nur im Heimnetz)\n' "$BASE_DOMAIN" "${LAN_IP:-keine}"
-	printf '    requests.%-21s -> %s   (oeffentlich)\n' "$BASE_DOMAIN" "${pub:-unbekannt}"
 	echo
-	echo "  Ein genauer Eintrag schlaegt im DNS immer den Platzhalter. Deshalb"
-	echo "  ist 'requests' die einzige Ausnahme, alles andere bleibt privat."
+	echo "  Aus dem Internet ist nichts erreichbar. Wer Wuensche eintragen soll,"
+	echo "  bekommt einen Zugang im Tailnet."
 	echo
 
 	dns_set_a "*" "$TS_IP" \
@@ -790,21 +793,15 @@ azure_dns_setup() {
 		info "Kein *.lan-Eintrag. Zu Hause nochmal starten, dann wird er gesetzt."
 	fi
 
-	if [[ -n $pub ]]; then
-		if ask_yn "requests.${BASE_DOMAIN} oeffentlich anlegen? (damit Familie und Freunde Wuensche eintragen koennen)" j; then
-			if dns_set_a "requests" "$pub"; then
-				ok "requests.${BASE_DOMAIN} zeigt auf $pub"
-				note "Am Router muessen 80 und 443 auf diesen Rechner zeigen, sonst nichts."
-				note "Wechselt deine Internet-Adresse, zeigt der Eintrag ins Leere."
-				note "Dauerhafte Loesung: CNAME auf einen DynDNS-Namen, docs/07-azure-dns.md."
-			else
-				problem "requests-Eintrag fehlgeschlagen"
-			fi
-		else
-			info "Kein oeffentlicher Eintrag. Dann ist auch Overseerr nur im Tailnet."
-		fi
-	else
-		note "Oeffentliche Adresse nicht ermittelbar, 'requests' wurde nicht gesetzt."
+	# Bis v1.6 zeigte requests.<domain> auf die oeffentliche Adresse. Ein
+	# genauer Eintrag schlaegt den Platzhalter, deshalb muss der alte Eintrag
+	# weg: sonst zeigt requests weiter nach draussen, wo seit dem Wegfall der
+	# Portweiterleitung niemand mehr antwortet.
+	if az network dns record-set a show -g "$AZ_RG" -z "$BASE_DOMAIN" -n requests \
+		--subscription "$AZ_SUB" --only-show-errors >>"$LOG" 2>&1; then
+		dns_del_a requests \
+			&& ok "Alter oeffentlicher Eintrag requests.${BASE_DOMAIN} entfernt" \
+			|| problem "requests.${BASE_DOMAIN} liess sich nicht entfernen"
 	fi
 
 	# -------------------------------------------------------- Speichern

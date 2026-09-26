@@ -127,12 +127,12 @@ Der Schnitt ist nicht drinnen gegen draußen, sondern **wer** zugreift.
 
 | Wer | Was | Wie |
 |---|---|---|
-| Familie und Freunde | Wünsche eintragen, Filme schauen | Overseerr öffentlich, Plex über seine eigenen Server |
-| nur du | alles andere | Tailscale, ohne offenen Port am Router |
+| Familie und Freunde | Filme schauen | Plex über seine eigenen Server |
+| alle mit Tailscale-Zugang | Wünsche eintragen, alles andere | Tailscale, ohne offenen Port am Router |
 | Geräte im Haus ohne Tailscale | alles andere | `https://<name>.lan.example.com:8443` |
 
 Mit einer Domain bei Azure DNS bekommt jeder Dienst eine eigene Adresse mit
-echtem Zertifikat, auch die, die aus dem Internet gar nicht erreichbar sind.
+echtem Zertifikat, obwohl keiner davon aus dem Internet erreichbar ist.
 Das geht, weil Caddy die DNS-01-Challenge nutzt und dafür nichts erreichbar
 sein muss.
 
@@ -144,10 +144,11 @@ hätte nicht genügt, weil jemand mit Kenntnis deiner Heim-IP sonst einfach
 
 Für Geräte, auf denen kein Tailscale läuft — Fernseher, Konsole, Besuch —
 gibt es dieselben Dienste noch einmal unter `<name>.lan.example.com`, aber auf
-**Port 8443**. Der Port ist dabei der Schutz, nicht der Name: Am Router sind
-nur 80 und 443 weitergeleitet, 8443 also nicht, und damit bleibt dieser Zugang
-im Haus. Stünde er auf 443, wäre er über die Portweiterleitung von außen
-erreichbar, und von den zwei Ebenen bliebe nur eine.
+**Port 8443**. Der Port ist dabei der Schutz, nicht der Name: Dieser Block
+ist der einzige ohne `bind`, er lauscht also auf allen Interfaces. Auf 8443
+bleibt er trotzdem im Haus, denn diesen Port leitet üblicherweise kein Router
+weiter. Stünde er auf 443, genügte eine einzige versehentlich eingerichtete
+Portweiterleitung, und er hinge im Internet.
 
 Ohne Domain erreichst du alles über `http://<ip>:<port>`. Funktioniert
 genauso, sieht nur weniger schön aus.
@@ -250,7 +251,7 @@ git tag v1.1.0 && git push origin v1.1.0
 Die Pipeline prüft alles durch, packt `mediastack.tar.gz`, testet das Archiv
 durch Auspacken und legt das Release samt Prüfsummen an. Geprüft wird unter
 anderem, dass qBittorrent im Netz von Gluetun bleibt, dass die optionalen
-Dienste ohne Profil nicht starten, und dass Caddy wirklich nur Overseerr
+Dienste ohne Profil nicht starten, und dass Caddy wirklich nichts
 öffentlich ausliefert.
 
 ## Aufbau des Repos
@@ -262,7 +263,7 @@ compose.yaml                  27 Dienste, optionale ueber Profile abgesichert
 .env.example                  Vorlage, setup.sh fuellt das meiste selbst
 renovate.json                 Update-Policy, Postgres-Major bewusst gesperrt
 caddy/Dockerfile              Caddy-Build mit dem Azure-DNS-Modul
-caddy/Caddyfile               oeffentlich vs. an tailscale0 gebunden
+caddy/Caddyfile               alles an tailscale0 gebunden, Heimnetz auf 8443
 recyclarr/recyclarr.yml       deutsche TRaSH-Profile (Recyclarr v8)
 homepage/services.yaml.tmpl   Dashboard-Vorlage, setup.sh setzt die Links
 systemd/                      Timer fuer OneDrive und Sicherung

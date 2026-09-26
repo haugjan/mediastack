@@ -107,7 +107,8 @@ Indexer nutzt, wählt ihn in der Auswahl am Anfang ab.
 
 ### 2. Overseerr anmelden
 
-`https://requests.example.com` öffnen und mit dem Plex-Konto anmelden. Sonarr
+`https://requests.example.com` öffnen (nur über Tailscale erreichbar) und mit
+dem Plex-Konto anmelden. Sonarr
 und Radarr sind darin bereits eingetragen, samt Stammordner und dem Profil
 `[German] HD Bluray + WEB`.
 

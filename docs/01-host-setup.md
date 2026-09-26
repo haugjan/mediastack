@@ -130,7 +130,7 @@ setzt und sich sicher fühlt, irrt.
 
 Was die Admin-Oberflächen tatsächlich schützt, sind zwei andere Dinge:
 
-- Am Router sind **ausschließlich 80 und 443** weitergeleitet.
+- Am Router ist **kein einziger Port** weitergeleitet.
 - Caddy fesselt die privaten Subdomains per `bind` an das
   Tailscale-Interface, sie haben am öffentlichen Interface keinen Listener.
 

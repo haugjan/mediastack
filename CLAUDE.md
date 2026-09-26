@@ -47,13 +47,16 @@ Zielgruppe sind Leute ohne Linux-Erfahrung. Daraus folgt alles Weitere:
 
 Die Sicherheitsarchitektur ist zweistufig: `bind {$TAILSCALE_IP}` sorgt dafür,
 dass am öffentlichen Interface für private Namen gar kein Listener existiert,
-`private_only` prüft zusätzlich `remote_ip`. **Öffentlich ist einzig
-`requests.<domain>` (Overseerr).** Das ist keine Stilfrage, die CI stellt es
-fest.
+`private_only` prüft zusätzlich `remote_ip`. **Aus dem Internet ist nichts
+erreichbar, auch `requests.<domain>` (Overseerr) nicht mehr** — bis v1.6 war
+das die eine Ausnahme, seit alle Wunsch-Geräte im Tailnet hängen, braucht der
+Router gar keine Weiterleitung mehr. Das ist keine Stilfrage, die CI stellt
+fest, dass kein Name auf 443 an allen Interfaces lauscht.
 
 Dazu kommt ein dritter Listener für Geräte im Haus ohne Tailscale:
 `*.lan.<domain>` auf **Port 8443**, und der ist wieder zweistufig abgesichert.
-Erstens der Port: der Router leitet nur 80 und 443 weiter, 8443 also nicht.
+Erstens der Port: 8443 leitet üblicherweise kein Router weiter, und dieser
+Block ist der einzige ohne `bind`.
 Zweitens `home_only`, das nur `{$LAN_SUBNET}` durchlässt — enger als
 `private_only`, weil ein Notebook auch mal in einem fremden WLAN steht und
 dort derselbe private Adressbereich gilt.
@@ -234,7 +237,7 @@ Profile schirmen die optionalen Dienste ab (ohne Profile ≥ 15 Dienste, aber
 kein `gluetun`, `qbittorrent`, `sabnzbd`, `paperless`, `caddy`), qBittorrent
 im Gluetun-Namespace, Plex und Caddy im Host-Netz, jeder Dienst mit
 `restart`-Policy, das Port-Forwarding-Kommando von Gluetun einzeilig, der
-Caddyfile baut und gibt nur Overseerr öffentlich frei, die Dashboard-Vorlage
+Caddyfile baut und gibt überhaupt nichts öffentlich frei, die Dashboard-Vorlage
 ergibt in beiden Zugriffsarten gültiges YAML.
 
 ## Veröffentlichen

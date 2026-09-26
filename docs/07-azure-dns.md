@@ -33,7 +33,7 @@ sudo ./setup.sh
        · Lege einen Zugang an, der NUR in dieser Zone schreiben darf
        ✓ Zugang bereit (Client-ID 3f7a1c02...)
        ✓ *.example.com zeigt auf 100.92.14.7
-       ✓ requests.example.com zeigt auf 84.75.x.x
+       ✓ *.lan.example.com zeigt auf 192.168.178.98
        ✓ Zugangsdaten in der .env gespeichert
        ✓ Azure bestaetigt: *.example.com -> 100.92.14.7
 ```
@@ -127,8 +127,6 @@ expliziter Record schlägt im DNS immer den Wildcard.
 ```bash
 TS_IP=$(tailscale ip -4 | head -1)
 LAN_IP=$(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
-PUBLIC_IP=$(curl -s https://ipinfo.io/ip)
-
 # Alles Private: Wildcard auf die Tailscale-Adresse
 az network dns record-set a add-record \
   -g "$RG" -z example.com -n "*" -a "$TS_IP"
@@ -136,18 +134,16 @@ az network dns record-set a add-record \
 # Dieselben Dienste fuers Heimnetz, auf die LAN-Adresse
 az network dns record-set a add-record \
   -g "$RG" -z example.com -n "*.lan" -a "$LAN_IP"
-
-# Die eine oeffentliche Ausnahme
-az network dns record-set a add-record \
-  -g "$RG" -z example.com -n "requests" -a "$PUBLIC_IP"
 ```
+
+Mehr ist es nicht. Es gibt keinen Eintrag, der nach draussen zeigt.
 
 Prüfen:
 
 ```bash
 dig +short paperless.example.com      # -> 100.x.y.z
 dig +short paperless.lan.example.com  # -> 192.168.x.y
-dig +short requests.example.com       # -> deine oeffentliche IP
+dig +short requests.example.com       # -> 100.x.y.z, wie alles andere
 ```
 
 Dass hier eine **private Adresse im öffentlichen DNS** steht, ist Absicht und
@@ -157,42 +153,28 @@ filtern private Adressen aus DNS-Antworten heraus, als Schutz vor
 DNS-Rebinding. Dann braucht `example.com` in der Router-Oberfläche eine
 Ausnahme, bei der Fritz!Box unter *Netzwerkeinstellungen → DNS-Rebind-Schutz*.
 
-## Schritt 3: Wechselnde Heim-IP (betrifft auch die Automatik)
+## Schritt 3: Keine Portweiterleitung
 
-Die meisten Schweizer Anschlüsse haben keine feste IPv4. Dann zeigt
-`requests.example.com` irgendwann ins Leere. Zwei Wege:
+Am Router ist **nichts** weiterzuleiten. Kein 443, kein 80, kein 32400 fuer
+Plex — das loest Plex ueber seine eigenen Server. Jeder geoeffnete Port waere
+eine Zeile, die du spaeter erklaeren musst.
 
-**A: CNAME auf einen DynDNS-Namen.** Dein Router kann vermutlich DynDNS bei
-einem Anbieter aktualisieren. Dann einmalig:
+Bis v1.6 war `requests.example.com` (Overseerr) die eine Ausnahme: ein
+A-Record auf die oeffentliche Adresse, dazu 80 und 443 am Router. Das ist
+weggefallen. Wer Wuensche eintragen soll, bekommt einen Zugang im Tailnet;
+damit entfaellt auch das Nachfuehren der wechselnden Heim-IP, das an
+Schweizer Anschluessen ohnehin ein Dauerthema war.
+
+Hast du den alten Eintrag noch, muss er weg — ein genauer Eintrag schlaegt
+im DNS immer den Platzhalter, `requests` zeigte sonst weiter ins Leere:
 
 ```bash
-az network dns record-set cname set-record \
-  -g "$RG" -z example.com -n "requests" -c "deinname.ddns.net"
+az network dns record-set a delete -g "$RG" -z example.com -n requests -y
 ```
 
-Danach ist es nicht mehr dein Problem. Das ist die pflegeleichteste Variante.
+`setup.sh` macht das beim naechsten Lauf von selbst.
 
-**B: Ein kleiner Timer, der den A-Record nachführt.** Mehr Kontrolle, aber
-noch ein Dienst, der laufen muss. Nur sinnvoll, wenn dein Router kein DynDNS
-kann.
-
-Falls du IPv6 hast und dein Anschluss ein stabiles Präfix liefert, ist ein
-AAAA-Record oft die stabilere Antwort als beides.
-
-## Schritt 4: Portweiterleitung
-
-Am Router **ausschließlich**:
-
-| Extern | Intern | Wofür |
-|---|---|---|
-| 80/tcp | Server:80 | Weiterleitung auf HTTPS |
-| 443/tcp | Server:443 | Overseerr |
-
-Nichts sonst. Kein 32400 für Plex, das löst Plex über seine eigenen Server.
-Kein 8989, kein 8000. Jeder zusätzlich geöffnete Port ist eine Zeile, die du
-später erklären musst.
-
-## Schritt 5: Testen
+## Schritt 4: Testen
 
 Beim ersten Start solltest du gegen das Let's-Encrypt-Staging gehen, sonst
 brennst du bei einem Konfigurationsfehler schnell das Rate-Limit ab. Dafür
@@ -225,7 +207,7 @@ Paperless-Seite, ist `bind` nicht aktiv und du solltest `TAILSCALE_IP` in der
 
 | Name | Ziel | Erreichbar |
 |---|---|---|
-| `requests.example.com` | Overseerr | **öffentlich** |
+| `requests.example.com` | Overseerr | Tailnet |
 | `paperless.example.com` | Paperless-ngx | Tailnet |
 | `music.example.com` | Navidrome | Tailnet |
 | `books.example.com` | Audiobookshelf | Tailnet |

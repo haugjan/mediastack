@@ -4,16 +4,19 @@
 # NICHTS aus dem Internet erreichbar sein, Caddy setzt nur einen TXT-Record
 # in der Zone. Ein Wildcard deckt alle Subdomains auf einmal ab.
 #
-# Die Trennung oeffentlich / privat passiert ueber "bind":
-#
-#   - requests.<domain> hat KEIN bind, lauscht also auf allen Interfaces und
-#     ist ueber die Portweiterleitung am Router erreichbar.
-#   - Alle anderen Namen sind an {$TAILSCALE_IP} gebunden. Am oeffentlichen
-#     Interface existiert fuer sie kein Listener. Wer die Heim-IP kennt und
-#     "Host: paperless.<domain>" schickt, landet deshalb nirgends.
+# Aus dem Internet ist NICHTS erreichbar. Jeder Name ist an
+# {$TAILSCALE_IP} gebunden, am oeffentlichen Interface existiert fuer ihn
+# also gar kein Listener. Wer die Heim-IP kennt und "Host: paperless.<domain>"
+# schickt, landet deshalb nirgends.
 #
 # Das ist der entscheidende Unterschied zu einer reinen DNS-Loesung: ein
 # A-Record auf die Tailscale-IP allein wuerde diesen Umweg nicht verhindern.
+#
+# Frueher war requests.<domain> (Overseerr) die eine Ausnahme, erreichbar
+# ueber eine Portweiterleitung am Router. Das ist weggefallen: alle Geraete,
+# die Wuensche eintragen, haengen ohnehin im Tailnet. Damit braucht der
+# Router keine Weiterleitung mehr, und es gibt keine Tuer, die man
+# versehentlich aufstehen lassen kann.
 {
 	email {$ACME_EMAIL}
 
@@ -75,11 +78,13 @@
 # Port. Gedacht fuer Geraete im WLAN, auf denen kein Tailscale laeuft:
 # Fernseher, Konsole, Besuch.
 #
-# Der Port ist hier der Schutz, nicht der Name. Am Router sind 80 und 443
-# weitergeleitet, deshalb darf hier NICHT 443 stehen. Stuende es da, waere
-# dieser Listener ueber die Portweiterleitung auch aus dem Internet
-# erreichbar. Auf 8443 bleiben es zwei Riegel: kein Listener am
-# weitergeleiteten Port, und die Pruefung auf das eigene Subnetz.
+# Der Port ist hier der Schutz, nicht der Name. Dieser Block ist der
+# einzige, der nicht an die Tailscale-Adresse gebunden ist, er lauscht also
+# auf allen Interfaces. Deshalb darf hier NICHT 443 stehen: leitet der
+# Router irgendwann doch einmal 80 oder 443 weiter, waere er sonst sofort
+# aus dem Internet erreichbar. Auf 8443 bleiben es zwei Riegel: ein Port,
+# den ueblicherweise niemand weiterleitet, und die Pruefung auf das eigene
+# Subnetz.
 #
 # Dieser Block bindet bewusst an KEINE feste Adresse. Eine Bindung an die
 # LAN-Adresse waere strenger, aber sie macht Caddy unstartbar, sobald der
@@ -129,12 +134,11 @@
 	reverse_proxy 127.0.0.1:{upstream}
 }
 
-# ============================================================== OEFFENTLICH
-# Der einzige Name, der aus dem Internet erreichbar ist.
+# ================================================================== PRIVAT
+# Wuensche. Das Zugriffsprotokoll bleibt, obwohl der Dienst nicht mehr
+# oeffentlich ist: es zeigt, wer aus dem Tailnet was angefragt hat.
 requests.{$BASE_DOMAIN} {
-	import sane_headers
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:5055
+	import private_app 5055
 	log {
 		output file /data/requests-access.log {
 			roll_size 10MiB
@@ -142,9 +146,6 @@ requests.{$BASE_DOMAIN} {
 		}
 	}
 }
-
-# ================================================================== PRIVAT
-# Alles ab hier nur aus dem Tailnet erreichbar.
 
 # Dokumente. Steuerunterlagen und Vertraege, niemals oeffentlich.
 paperless.{$BASE_DOMAIN} {

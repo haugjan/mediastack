@@ -20,7 +20,7 @@ Die Kette hat drei Glieder, und jedes einzelne würde schon genügen:
 |---|---|
 | **DNS** | `paperless.example.com` löst auf `100.x.y.z` auf, eine Tailnet-Adresse. Die ist aus dem Internet grundsätzlich nicht routbar. |
 | **Listener** | Caddy lauscht für diesen Namen per `bind` ausschließlich auf dem `tailscale0`-Interface. Am öffentlichen Interface existiert er nicht. |
-| **Router** | Weitergeleitet sind nur 80 und 443, und dort antwortet nur `requests.example.com`. |
+| **Router** | Es ist überhaupt nichts weitergeleitet. Kein 80, kein 443, kein 32400. |
 
 Das zweite Glied ist der wichtige. Ein DNS-Eintrag allein wäre zu wenig: wer
 deine Heim-Adresse kennt, könnte sich zu Port 443 verbinden und
@@ -54,12 +54,13 @@ https://sonarr.lan.example.com:8443
 Das Muster ist immer `<name>.lan.<domain>:8443`, mit denselben Namen wie
 oben. Echtes Zertifikat, keine Browserwarnung, kein VPN.
 
-**Warum ein anderer Port, und nicht einfach Port 443?** Weil der Router 80
-und 443 auf genau diesen Rechner weiterleitet. Läge der Heimnetz-Zugang auf
-443, wäre er über die Portweiterleitung auch aus dem Internet erreichbar —
-der Listener existiert dann ja. 8443 leitet der Router nicht weiter, damit
-bleibt es bei zwei Riegeln. Genau das prüft auch die CI: verschiebt jemand
-den Block auf 443, schlägt sie an.
+**Warum ein anderer Port, und nicht einfach Port 443?** Weil dieser Block
+als einziger nicht an die Tailscale-Adresse gebunden ist — er lauscht auf
+allen Interfaces, sonst funktionierte er im WLAN nicht. Läge er auf 443,
+genügte eine einzige versehentlich eingerichtete Portweiterleitung, und er
+hinge im Internet. 8443 leitet üblicherweise kein Router weiter, damit bleibt
+es bei zwei Riegeln. Genau das prüft auch die CI: verschiebt jemand den Block
+auf 443, schlägt sie an.
 
 Der zweite Riegel ist hier enger gefasst als bei den Tailscale-Namen:
 durchgelassen wird nur dein eigenes Subnetz, nicht jeder private
@@ -219,10 +220,11 @@ Wege, und der zweite ist meistens der bessere:
 - **Ins Tailnet einladen.** In der Admin-Konsole unter **Users** teilen, oder
   einen einzelnen Rechner per **Share** freigeben. Sinnvoll für den Haushalt
   oder jemanden, der ohnehin Technik mag.
-- **Gar keinen Zugriff geben.** Familie und Freunde brauchen in der Praxis nur
-  zwei Dinge: Wünsche eintragen und Filme schauen. Das erste löst Overseerr
-  unter `requests.example.com`, das zweite Plex über seine eigenen Server.
-  Beides ohne Tailscale, ohne Konto bei dir und ohne dass sie irgendetwas
-  installieren.
+- **Nur Plex geben.** Filme schauen geht ohne alles: Plex löst seinen
+  Fernzugriff über eigene Server, ohne Tailscale und ohne offenen Port bei
+  dir. Wer darüber hinaus Wünsche eintragen soll, braucht seit v1.7 einen
+  Zugang im Tailnet — Overseerr steht nicht mehr im Internet. Für einen
+  Haushalt ist das eine einmalige Einladung, danach fällt es niemandem mehr
+  auf.
 
 Paperless gehört in keinem Fall dazu.

@@ -192,14 +192,14 @@ jobs:
           print('oeffentlich:', sorted(public))
           print('tailnet    :', len(tailnet), 'Namen')
           print('heimnetz   :', sorted(heimnetz))
-          # Der erste Riegel: der Heimnetz-Zugang darf nicht auf 443 liegen.
-          # Laege er dort, stuende er hier unter 'oeffentlich', weil der
-          # Router genau diesen Port weiterleitet.
-          assert public == {'requests.example.ch'}, f'Unerwartet oeffentlich: {public}'
+          # Kein Name darf auf 443 an allen Interfaces lauschen. Der
+          # Heimnetz-Zugang liegt deshalb auf 8443; laege er auf 443, stuende
+          # er hier unter 'oeffentlich'.
+          assert not public, f'Unerwartet oeffentlich: {public}'
           assert heimnetz == {'*.lan.example.ch'}, f'Unerwartet im Heimnetz: {heimnetz}'
-          for name in ('paperless', 'music', 'sonarr', 'qbit'):
+          for name in ('paperless', 'music', 'sonarr', 'qbit', 'requests'):
               assert f'{name}.example.ch' in tailnet, f'{name} ist nicht privat'
-          print('OK   nur Overseerr oeffentlich, Heimnetz auf 8443 und nur im eigenen Netz')
+          print('OK   nichts oeffentlich, Heimnetz auf 8443 und nur im eigenen Netz')
           "
 
       - name: Dashboard-Vorlage ergibt gueltiges YAML
