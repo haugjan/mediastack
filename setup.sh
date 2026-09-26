@@ -2017,6 +2017,41 @@ if (( USE_TORRENT )) && [[ -n $(env_get QBIT_PASS 2>/dev/null || true) ]]; then
 fi
 if (( USE_USENET )) && [[ -n $(env_get SABNZBD_API_KEY 2>/dev/null || true) ]]; then
 	sk="$(env_get SABNZBD_API_KEY)"
+	# SABnzbd beantwortet jede Anfrage unter einem Namen, den es nicht kennt,
+	# mit 403 ("Hostname verification failed"). Ab Werk kennt es nur die
+	# eigene Container-ID. Sonarr & Co. rufen es aber als "sabnzbd" auf, und
+	# Caddy reicht die Subdomain durch. localhost laesst es immer durch,
+	# deshalb klappt der Aufruf von hier aus.
+	sabhosts=(sabnzbd)
+	bd="$(env_get BASE_DOMAIN 2>/dev/null || true)"
+	[[ -n $bd ]] && sabhosts+=("${SUB[sabnzbd]}.$bd" "${SUB[sabnzbd]}.lan.$bd")
+	python3 - "$sk" "${sabhosts[@]}" >>"$LOG" 2>&1 <<'PY'
+import json, sys, urllib.parse, urllib.request
+
+key, names = sys.argv[1], sys.argv[2:]
+
+def call(**query):
+    query.update(apikey=key, output="json")
+    url = "http://localhost:8081/api?" + urllib.parse.urlencode(query)
+    with urllib.request.urlopen(url, timeout=10) as r:
+        return json.load(r)
+
+cur = call(mode="get_config", section="misc", keyword="host_whitelist")
+cur = cur["config"]["misc"]["host_whitelist"]
+if isinstance(cur, str):
+    cur = cur.split(",")
+have = [h.strip() for h in cur if h.strip()]
+missing = [n for n in names if n not in have]
+if not missing:
+    sys.exit(3)
+call(mode="set_config", section="misc", keyword="host_whitelist",
+     value=", ".join(have + missing))
+PY
+	case $? in
+		0) ok "SABnzbd nimmt Anfragen unter seinem Namen an" ;;
+		3) ok "SABnzbd kennt seine Namen bereits" ;;
+		*) problem "SABnzbd: Hostnamen liessen sich nicht freigeben (403 in Sonarr & Co.)" ;;
+	esac
 	for spec in "8989${US}v3${US}$SONARR_KEY${US}tvCategory${US}tv" \
 	            "7878${US}v3${US}$RADARR_KEY${US}movieCategory${US}movies" \
 	            "8686${US}v1${US}$LIDARR_KEY${US}musicCategory${US}music"; do
