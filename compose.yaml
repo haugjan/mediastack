@@ -121,7 +121,7 @@ services:
   # Verbindung traegt setup.sh dort selbst ein.
   flaresolverr:
     <<: *base
-    image: ghcr.io/flaresolverr/flaresolverr:v3
+    image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
     container_name: flaresolverr
     profiles: [flaresolverr]
     environment:
