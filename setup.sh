@@ -277,9 +277,28 @@ want() { [[ ${WANT[$1]:-0} == 1 ]]; }
 # in COMPOSE_PROFILES, die Einstellungen erkennt man an ihren Spuren.
 if (( ! FIRST_RUN )); then
 	PROF_NOW=",$(env_get COMPOSE_PROFILES 2>/dev/null || true),"
+	# Bis v1.3 hatten die Kerndienste gar kein Profil, die Liste nannte nur
+	# die optionalen Bereiche. Fehlt darin jedes Dienstprofil, ist es so eine
+	# alte Liste: dann heisst "steht nicht drin" nicht abgewaehlt, und die
+	# Kerndienste bleiben angekreuzt. scripts/update.sh zieht die Liste beim
+	# Aktualisieren nach, dieser Zweig faengt den Git-Checkout ab.
+	ALT=1
+	for k in plex sonarr radarr homepage; do
+		[[ $PROF_NOW == *",$k,"* ]] && ALT=0
+	done
+	(( ALT )) && [[ $PROF_NOW == *,extras,* ]] && { WANT[kometa]=1; WANT[scrutiny]=1; }
 	for k in "${ORDER[@]}"; do
 		[[ -n ${PROF_OF[$k]} ]] || continue
-		if [[ $PROF_NOW == *",${PROF_OF[$k]},"* ]]; then WANT[$k]=1; else WANT[$k]=0; fi
+		if [[ $PROF_NOW == *",${PROF_OF[$k]},"* ]]; then
+			WANT[$k]=1
+		elif (( ALT )); then
+			# Alte Liste: nur die damals optionalen Teile gelten als abgewaehlt.
+			case $k in
+				torrent|usenet|docs|radio|domain|kometa|scrutiny) WANT[$k]=0 ;;
+			esac
+		else
+			WANT[$k]=0
+		fi
 	done
 	[[ -n $(env_get SPOTIFY_CLIENT_ID 2>/dev/null || true) ]] || WANT[youtube]=0
 	[[ -f /etc/rclone/rclone.conf ]] || WANT[onedrive]=0
@@ -589,7 +608,7 @@ fi
 # =========================================================================
 # 5. Eigene Web-Adressen, vollautomatisch ueber Azure DNS
 # =========================================================================
-step "5/9  Eigene Web-Adressen (optional)"
+step "5/9  Eigene Web-Adressen"
 
 USE_PROXY=0
 BASE_DOMAIN="$(env_get BASE_DOMAIN 2>/dev/null || true)"
@@ -1165,7 +1184,7 @@ fi
 # =========================================================================
 # 7. Dokumente
 # =========================================================================
-step "7/9  Dokumente und OneDrive (optional)"
+step "7/9  Dokumente und OneDrive"
 
 USE_DOCS=0
 if ! want docs; then

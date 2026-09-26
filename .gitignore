@@ -22,3 +22,8 @@ Thumbs.db
 
 # Legt "python3 -m py_compile" bei der Pruefung vor dem Commit an.
 __pycache__/
+
+# Baut "dotnet build" neben den Quellen von aircheckarr an. Im Container
+# entsteht das ohnehin frisch, hier waere es nur Ballast.
+bin/
+obj/

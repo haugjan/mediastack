@@ -93,7 +93,7 @@ ohne Profil laufen hieße ohne Zugang in die Neustartschleife.
 
 ## setup.sh
 
-Rund 1700 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
+Rund 2300 Zeilen, neun Schritte, ein einziger davon bricht hart ab.
 
 - **Ganz vorne steht die Auswahl.** Vor Schritt 1 zeigt `choose` eine Liste
   aller Dienste und Optionen, alles angekreuzt, Nummern schalten um. Die

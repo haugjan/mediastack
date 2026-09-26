@@ -52,8 +52,9 @@ Danach fragt `setup.sh` in Schritt 5 bis 8 nach. Von Hand in `.env` geht es auch
 | `ACME_EMAIL` | deine Adresse für Let's Encrypt |
 | `AZURE_*` | Service Principal, siehe [docs/07](07-azure-dns.md) |
 
-Alles davon ist optional. Sagst du beim Installer „nein", läuft der Rest
-trotzdem, und du holst es später mit einem weiteren `sudo ./setup.sh` nach.
+Alles davon ist optional. Was du in der Auswahl am Anfang abwählst, wird gar
+nicht erst erfragt; und lässt du einen Wert leer, läuft der Rest trotzdem, und
+du holst es später mit einem weiteren `sudo ./setup.sh` nach.
 
 Bei ProtonVPN ist das Häkchen bei NAT-PMP der Punkt, an dem es meistens
 schiefgeht. Ohne das bekommt qBittorrent keinen eingehenden Port und seedet

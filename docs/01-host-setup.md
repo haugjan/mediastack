@@ -163,12 +163,18 @@ lsblk -dno NAME,SIZE,MODEL
 ```
 
 Die `devices:`-Liste im `scrutiny`-Block der `compose.yaml` muss zu dieser
-Ausgabe passen, sonst startet der Container nicht. Genau deshalb steckt
-Scrutiny im Profil `extras` und läuft nicht automatisch mit. Einschalten,
-wenn die Liste stimmt:
+Ausgabe passen, sonst startet der Container nicht. Genau deshalb ist Scrutiny
+das einzige Angebot, das in der Auswahl von `setup.sh` **nicht** vorangekreuzt
+ist. Einschalten, wenn die Liste stimmt:
 
 ```bash
-# in .env: COMPOSE_PROFILES=...,extras
+sudo ./setup.sh          # in der Auswahl "Festplattenzustand" ankreuzen
+```
+
+Von Hand geht es auch, das Profil heisst wie der Dienst:
+
+```bash
+# in .env: COMPOSE_PROFILES=...,scrutiny
 docker compose up -d scrutiny
 ```
 

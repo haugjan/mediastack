@@ -126,6 +126,27 @@ cp -a "$NEW/." . || {
 	printf '\n%sAbbruch:%s Kopieren fehlgeschlagen. Rechte pruefen.\n\n' "$R" "$N" >&2
 	exit 3; }
 ok "Auf $TAG aktualisiert"
+
+# Ab v1.4 hat jeder Dienst sein eigenes Profil, und COMPOSE_PROFILES ist die
+# Liste dessen, was laufen soll. Eine aeltere .env nennt dort nur die
+# optionalen Bereiche, weil die Kerndienste damals ohne Profil liefen. Ohne
+# diese Ergaenzung startet nach dem Update kein Plex, kein Sonarr, nichts.
+if [[ -f .env ]] && ! grep -q '^COMPOSE_PROFILES=.*\bplex\b' .env; then
+	alt="$(sed -n 's/^COMPOSE_PROFILES=//p' .env | head -1)"
+	neu="plex,sonarr,radarr,lidarr,prowlarr,bazarr,navidrome,audiobookshelf"
+	neu="$neu,overseerr,tautulli,homepage,uptime,cleanuparr,unpackerr"
+	neu="$neu,recyclarr,backfill"
+	# Was vorher schon lief, bleibt. "extras" gibt es nicht mehr, es war
+	# Kometa und Scrutiny.
+	for p in torrent usenet docs proxy radio; do
+		[[ ,$alt, == *,$p,* ]] && neu="$neu,$p"
+	done
+	[[ ,$alt, == *,extras,* ]] && neu="$neu,kometa,scrutiny"
+	sed -i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$neu|" .env
+	ok "Profilliste auf das neue Format gebracht (jeder Dienst einzeln)"
+	info "Abwaehlen geht ab jetzt in der Auswahl von sudo ./setup.sh"
+fi
+
 (( FROM_SETUP )) && exit 0
 
 if [[ -f homepage/services.yaml ]]; then
