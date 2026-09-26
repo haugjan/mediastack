@@ -803,6 +803,14 @@ rclone_user() {
 rclone_has()  { rclone_user listremotes 2>/dev/null | grep -qx -- "$1:"; }
 rclone_live() { rclone_user lsd -- "$1:" >>"$LOG" 2>&1; }
 
+# Bricht die Anmeldung nach dem Browser ab, etwa weil rclone kein Laufwerk
+# auswaehlen kann, bleibt ein Remote ohne drive_id stehen. Das sieht aus wie
+# eine abgelaufene Anmeldung, laesst sich aber nicht erneuern, nur neu anlegen.
+rclone_half() {
+	rclone_has "$1" || return 1
+	! rclone_user config show "$1" 2>/dev/null | grep -q '^drive_id = .'
+}
+
 rclone_install() {
 	local v
 	if ! command -v rclone >/dev/null 2>&1; then
@@ -811,9 +819,10 @@ rclone_install() {
 	fi
 	v="$(rclone version 2>/dev/null | awk 'NR==1 {print $2}' | tr -d v)"
 	# Alte Versionen fallen bei OneDrive um, Microsoft dreht regelmaessig an
-	# der Schnittstelle. Ist die Paketquelle zu alt, kommt das offizielle
+	# der Schnittstelle. Debian 13 liefert 1.60 von 2022, das scheitert schon
+	# an der Laufwerksauswahl. Ist die Paketquelle zu alt, kommt das offizielle
 	# Installationsskript hinterher.
-	if [[ -n $v ]] && printf '1.60\n%s\n' "$v" | sort -VC; then
+	if [[ -n $v ]] && printf '1.70\n%s\n' "$v" | sort -VC; then
 		ok "rclone $v"
 		return 0
 	fi
@@ -863,10 +872,15 @@ rclone_connect() {
 	# etwas, oder bricht die Anmeldung ab, uebernimmt der vollstaendige
 	# Assistent. Der ist umstaendlicher, aber seit Jahren unveraendert.
 	note "Der kurze Weg hat nicht geklappt, jetzt der vollstaendige Assistent."
+	rclone_user config delete "$remote" >>"$LOG" 2>&1
 	info "Darin: n (new remote), Name $remote, Storage onedrive, Rest wie oben,"
 	info "danach q zum Beenden."
 	rclone_user config </dev/tty >/dev/tty 2>&1
-	rclone_live "$remote"
+	rclone_live "$remote" && return 0
+	# Nichts Halbes stehen lassen, sonst haelt der naechste Lauf es fuer eine
+	# abgelaufene Anmeldung.
+	rclone_user config delete "$remote" >>"$LOG" 2>&1
+	return 1
 }
 
 # Das verschluesselte Remote liegt im selben Konto, verschluesselt aber Datei-
@@ -899,6 +913,11 @@ onedrive_setup() {
 	rclone_defaults
 	remote="$(env_get RCLONE_REMOTE)"; crypt="$(env_get RCLONE_REMOTE_CRYPT)"
 	inbox="$(env_get RCLONE_INBOX_PATH)"
+
+	if rclone_half "$remote"; then
+		note "$remote ist nur halb eingerichtet, die Anmeldung wird wiederholt."
+		rclone_user config delete "$remote" >>"$LOG" 2>&1
+	fi
 
 	if rclone_live "$remote"; then
 		ok "OneDrive ist schon verbunden"
