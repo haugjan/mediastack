@@ -24,9 +24,11 @@ public sealed record MediathekItem(
     // Die Id muss stabil sein: dieselbe Sendung soll nach einem Neustart
     // dieselbe Id haben, sonst zeigt eine alte .nzb ins Leere. Deshalb aus
     // der Adresse abgeleitet und nicht gezaehlt.
-    public string Id => Convert.ToHexString(
+    public string Id => IdFor(BestUrl);
+
+    public static string IdFor(string url) => Convert.ToHexString(
         System.Security.Cryptography.MD5.HashData(
-            System.Text.Encoding.UTF8.GetBytes(BestUrl)))[..16].ToLowerInvariant();
+            System.Text.Encoding.UTF8.GetBytes(url)))[..16].ToLowerInvariant();
 }
 
 // Was wir Sonarr und Radarr als "Release" anbieten. Die Id taucht in der

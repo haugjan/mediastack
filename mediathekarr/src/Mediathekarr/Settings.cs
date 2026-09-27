@@ -16,6 +16,12 @@ public sealed class Settings
     // sendungen passen weder zu Sonarr noch zu Radarr.
     public string LibraryRoot { get; init; } = Env("MEDIATHEKARR_LIBRARY", "/data/media/mediathek");
 
+    // Die komplette Liste aller Mediatheken, Grundlage fuer das Stoebern
+    // nach Kategorie und Sendung. MediathekView erneuert sie mehrmals am
+    // Tag; einmal taeglich reicht, die neuesten Folgen kommen live dazu.
+    public string FilmlisteUrl { get; init; } = Env("MEDIATHEKARR_FILMLISTE", "https://liste.mediathekview.de/Filmliste-akt.xz");
+    public int FilmlisteHours { get; init; } = EnvInt("MEDIATHEKARR_FILMLISTE_HOURS", 24);
+
     // Die oeffentliche API von MediathekViewWeb. Sie fasst die Mediatheken
     // von ARD, ZDF, SRF, ORF und weiteren zusammen.
     public string ApiUrl { get; init; } = Env("MEDIATHEKARR_API", "https://mediathekviewweb.de/api/query");
@@ -28,9 +34,12 @@ public sealed class Settings
     // Trailer, keine Sendung. In Sekunden.
     public int MinDurationSeconds { get; init; } = EnvInt("MEDIATHEKARR_MIN_DURATION", 600);
 
-    // Sender, die beruecksichtigt werden. Leer heisst: alle.
+    // Sender, die beruecksichtigt werden. Leer heisst: alle. Verglichen wird
+    // mit "enthaelt", deshalb ARTE.DE statt arte: sonst kaemen die
+    // englische, franzoesische, spanische, italienische und polnische
+    // Fassung mit, jede als eigene Mediathek in der Seitenleiste.
     public string[] Channels { get; init; } =
-        Env("MEDIATHEKARR_CHANNELS", "ARD,ZDF,SRF,ORF,3Sat,arte,BR,NDR,WDR,SWR,MDR,HR,RBB,KiKA,DW,Funk,PHOENIX")
+        Env("MEDIATHEKARR_CHANNELS", "ARD,ZDF,SRF,ORF,3Sat,ARTE.DE,BR,NDR,WDR,SWR,MDR,HR,RBB,KiKA,DW,Funk,PHOENIX")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static string Env(string key, string fallback)

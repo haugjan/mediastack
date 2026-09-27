@@ -118,7 +118,7 @@ public sealed class MediathekViewClient(HttpClient http, Settings cfg, ILogger<M
                 // Hauptfassung zu unterscheiden und landen dann zufaellig
                 // in der Bibliothek - mit eingesprochenen Bildbeschreibungen
                 // ueber dem Ton.
-                if (Barrierefrei.Any(m => item.Title.Contains(m, StringComparison.OrdinalIgnoreCase))) continue;
+                if (IsAccessibilityVersion(item.Title)) continue;
                 if (string.IsNullOrWhiteSpace(item.BestUrl)) continue;
                 if (cfg.Channels.Length > 0 &&
                     !cfg.Channels.Any(c => item.Channel.Contains(c, StringComparison.OrdinalIgnoreCase)))
@@ -134,6 +134,9 @@ public sealed class MediathekViewClient(HttpClient http, Settings cfg, ILogger<M
             return ([], 0);
         }
     }
+
+    public static bool IsAccessibilityVersion(string title) =>
+        Barrierefrei.Any(m => title.Contains(m, StringComparison.OrdinalIgnoreCase));
 
     private static readonly string[] Barrierefrei =
         ["Audiodeskription", "Hoerfassung", "Hörfassung", "Gebaerdensprache", "Gebärdensprache",

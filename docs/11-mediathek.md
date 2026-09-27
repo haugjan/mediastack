@@ -78,17 +78,40 @@ Rückfall, nicht die erste Wahl — aber ein Rückfall, den niemand sperrt.
 Die Oberfläche unter `https://mediathek.example.com` oder `http://<ip>:8098`
 ist aufgebaut wie Sonarr und hat vier Seiten:
 
-- **Stöbern.** Links die einzelnen Mediatheken (ARD, ZDF, SRF, ORF …), rechts
-  ihre neuesten Sendungen. Oben suchst du in der gewählten Mediathek, ein
-  Klick auf den Sendungsnamen zeigt nur diese Reihe. *Laden* holt eine
-  Sendung sofort, mehrere gehen über die Kästchen links und *Herunterladen*.
-  Kürzer als zehn Minuten wird ausgeblendet, *Auch kurze Beiträge* zeigt
-  Nachrichten und Ausschnitte trotzdem.
+- **Stöbern.** Links die einzelnen Mediatheken (ARD, ZDF, SRF, ORF,
+  ZDFinfo …). Rechts alle Sendungen dieser Mediathek als Kacheln mit
+  Vorschaubild, A–Z, darüber die Kategorien (Krimi, Dokumentation, Kinder,
+  Filme, Wissen …) mit ihrer Anzahl. Oben suchst du eine Sendung. Ein Klick
+  auf eine Kachel zeigt ihre Folgen; *Laden* holt eine Folge sofort, mehrere
+  gehen über die Kästchen links und *Herunterladen*. Der Knopf *Neueste*
+  zeigt stattdessen die jüngsten Beiträge, dort blendet *Auch kurze
+  Beiträge* auch Nachrichten und Ausschnitte ein.
 - **Downloads.** Was läuft, mit Fortschritt, und was Sonarr und Radarr über
   den Blackhole abgeholt haben.
 - **Indexer-Test.** Genau das, was Sonarr und Radarr bei einer Suche angeboten
   bekämen, samt Release-Namen.
 - **System.** Ordner und Einstellungen.
+
+## Woher die Übersicht kommt
+
+MediathekViewWeb, das Mediathekarr für Sonarr und Radarr abfragt, liefert
+höchstens 1000 Treffer je Anfrage — daraus lässt sich keine Übersicht aller
+Sendungen bauen. Das Projekt MediathekView veröffentlicht aber mehrmals am
+Tag die komplette **Filmliste**: gut 700 000 Beiträge, 77 MB. Mediathekarr
+lädt sie einmal täglich und baut daraus einen eigenen Index (rund 335 000
+Beiträge ab zehn Minuten in 11 000 Sendereihen). Beim allerersten Start
+dauert das einige Minuten; bis dahin zeigt *Stöbern* die neuesten Beiträge.
+
+Die Kategorien gibt es in der Liste nicht. Mediathekarr leitet sie aus dem
+Namen der Sendereihe ab, bei unbekannten Namen aus der Beschreibung. Die
+großen Reihen landen zuverlässig richtig, bei kleinen steht manches unter
+*Weitere*. Die Vorschaubilder holt Mediathekarr erst, wenn eine Kachel
+sichtbar wird, von der Webseite der neuesten Folge, und behält sie.
+
+| Variable | Vorgabe | Bedeutung |
+|---|---|---|
+| `MEDIATHEKARR_FILMLISTE` | `https://liste.mediathekview.de/Filmliste-akt.xz` | Quelle der Filmliste |
+| `MEDIATHEKARR_FILMLISTE_HOURS` | `24` | wie oft sie neu geladen wird |
 
 ## Direkt-Download und die Plex-Bibliothek „Mediathek"
 

@@ -199,6 +199,14 @@ HTTP-Download ergäbe vier Kilobyte Text als `.mp4`. Und MediathekViewWeb
 führt viele Sendungen **doppelt** unter zwei Adressen; beim Stöbern wird nach
 Sender, Sendung, Titel und Sendezeit zusammengefasst.
 
+Die Übersicht nach Sendung und Kategorie kommt **nicht** von
+MediathekViewWeb (höchstens 1000 Treffer je Anfrage), sondern aus der
+täglichen Filmliste von MediathekView, die `FilmIndex` in eine eigene
+`filmliste.db` einliest — neu aufgebaut wird in eine zweite Datei, die erst
+am Schluss die alte ersetzt. Das Format hat hunderttausendmal denselben
+Schlüssel `"X"`, leere Felder heißen „wie davor", und `Url HD` ist
+`Länge|Rest` relativ zur normalen Url.
+
 Beide Ordner — Blackhole und Fertig — liegen unter `/data`, sonst kopiert der
 Import statt zu verlinken.
 

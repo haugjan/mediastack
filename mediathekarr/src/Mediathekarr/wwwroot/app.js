@@ -26,6 +26,9 @@ const SYMBOLE = {
   zu: '<path d="M18 6L6 18M6 6l12 12"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   filter: '<path d="M22 3H2l8 9.5V19l4 2v-8.5L22 3z"/>',
+  kacheln: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  liste: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  zurueck: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
 };
 const sym = (name) =>
   `<svg class="sym" viewBox="0 0 24 24" aria-hidden="true">${SYMBOLE[name] ?? ""}</svg>`;
@@ -78,6 +81,11 @@ const zustand = {
   seite: null,
   sender: "",      // leer = alle Mediatheken
   sendung: "",     // Sendereihe, auf die eingeschraenkt ist
+  ansicht: "",     // "" = Sendungen als Kacheln, "neu" = neueste Beitraege
+  kategorie: "",
+  kanaele: [],     // Sender, wie sie im Index stehen
+  sendungen: [],
+  kategorien: [],
   suche: "",
   kurz: false,
   status: null,
@@ -108,19 +116,29 @@ function adresseLesen() {
     seite: SEITEN[seite] ? seite : "stoebern",
     sender: decodeURIComponent(sender),
     sendung: p.get("sendung") ?? "",
+    ansicht: p.get("ansicht") ?? "",
+    kategorie: p.get("kategorie") ?? "",
   };
 }
 
-function adresse(sender, sendung) {
+function adresse(sender, sendung, weitere = {}) {
   const s = sender ? `/${encodeURIComponent(sender)}` : "";
-  const q = sendung ? `?sendung=${encodeURIComponent(sendung)}` : "";
-  return `#/stoebern${s}${q}`;
+  const p = new URLSearchParams();
+  if (sendung) p.set("sendung", sendung);
+  for (const [k, v] of Object.entries(weitere)) if (v) p.set(k, v);
+  const q = p.toString();
+  return `#/stoebern${s}${q ? `?${q}` : ""}`;
 }
+
+const indexBereit = () => zustand.status?.index?.ready === true;
+// Kacheln, solange nicht ausdruecklich "Neueste" gewaehlt oder eine
+// Sendung geoeffnet ist.
+const kachelAnsicht = () => !zustand.sendung && zustand.ansicht !== "neu" && indexBereit();
 
 // -------------------------------------------------------------- Zeichnen
 function navigation() {
   const s = zustand.status;
-  const sender = s?.sender ?? [];
+  const sender = zustand.kanaele.length ? zustand.kanaele.map((k) => k.name) : (s?.sender ?? []);
   const aktiv = (x) => (x ? " aktiv" : "");
   const unter = zustand.seite === "stoebern"
     ? `<div class="unter-titel">Mediatheken</div>
@@ -140,10 +158,17 @@ function werkzeug() {
   let links = `<button class="wz" data-wz="aktualisieren" title="Aktualisieren">${sym("aktualisieren")}<span>Aktualisieren</span></button>`;
   let rechts = "";
   if (zustand.seite === "stoebern") {
-    links = `<button class="wz" data-wz="markierte" title="Markierte herunterladen">${sym("laden")}<span>Herunterladen</span></button>
-      <span class="trenner"></span>${links}`;
-    rechts = `<label class="wz-filter" title="Beiträge unter ${zustand.status?.mindestdauer ?? 600} s zeigen: Nachrichten, Ausschnitte">
-        <input type="checkbox" id="kurz" ${zustand.kurz ? "checked" : ""}> Auch kurze Beiträge</label>`;
+    const kacheln = !zustand.sendung && zustand.ansicht !== "neu";
+    const umschalter = `
+      <button class="wz${kacheln ? " gewaehlt" : ""}" data-wz="sendungen" title="Sendungen nach Kategorie">${sym("kacheln")}<span>Sendungen</span></button>
+      <button class="wz${zustand.ansicht === "neu" && !zustand.sendung ? " gewaehlt" : ""}" data-wz="neu" title="Die neuesten Beiträge">${sym("liste")}<span>Neueste</span></button>
+      <span class="trenner"></span>`;
+    const laden = kacheln ? "" : `<button class="wz" data-wz="markierte" title="Markierte herunterladen">${sym("laden")}<span>Herunterladen</span></button>`;
+    links = umschalter + laden + links;
+    if (zustand.ansicht === "neu" && !zustand.sendung) {
+      rechts = `<label class="wz-filter" title="Beiträge unter ${zustand.status?.mindestdauer ?? 600} s zeigen: Nachrichten, Ausschnitte">
+          <input type="checkbox" id="kurz" ${zustand.kurz ? "checked" : ""}> Auch kurze Beiträge</label>`;
+    }
   }
   $("#werkzeug").innerHTML = `<div class="wz-links">${links}</div><div class="wz-rechts">${rechts}</div>`;
 }
@@ -154,15 +179,63 @@ function zustandEtikett(t) {
   return `<button class="knopf" data-laden="${esc(t.id)}">${sym("laden")}Laden</button>`;
 }
 
+const bildUrl = (kanal, sendung) =>
+  `/api/bild?kanal=${encodeURIComponent(kanal)}&sendung=${encodeURIComponent(sendung)}`;
+
+// Ein Bild, das es nicht gibt, verschwindet; darunter steht der
+// Anfangsbuchstabe als Platzhalter.
+const bild = (kanal, sendung, klasse) => `<div class="${klasse}">
+  <span class="initial">${esc((sendung.trim()[0] ?? "?").toUpperCase())}</span>
+  ${indexBereit() ? `<img loading="lazy" alt="" src="${bildUrl(kanal, sendung)}" onerror="this.remove()">` : ""}</div>`;
+
+function sendungenZeichnen() {
+  const ziel = $("#inhalt");
+  const gesamt = zustand.kategorien.reduce((n, k) => n + k.anzahl, 0);
+  const chip = (name, anzahl, aktiv) =>
+    `<a class="chip${aktiv ? " aktiv" : ""}" href="${adresse(zustand.sender, "", { kategorie: name === "Alle" ? "" : name })}">
+       ${esc(name)} <span>${anzahl}</span></a>`;
+  const chips = `<nav class="chips">${chip("Alle", gesamt, !zustand.kategorie)}${
+    zustand.kategorien.map((k) => chip(k.name, k.anzahl, zustand.kategorie === k.name)).join("")}</nav>`;
+  if (!zustand.sendungen.length) {
+    ziel.innerHTML = `${chips}<p class="leer">Keine Sendung gefunden.</p>`;
+    return;
+  }
+  const kacheln = zustand.sendungen.map((t) => `
+    <a class="kachel" href="${adresse(t.kanal, t.name)}" title="${esc(t.name)}">
+      ${bild(t.kanal, t.name, "kachel-bild")}
+      <div class="kachel-text"><strong>${esc(t.name)}</strong>
+        <span class="klein">${zustand.sender ? "" : `${esc(t.kanal)} · `}${t.folgen} ${t.folgen === 1 ? "Folge" : "Folgen"}
+          · ${esc(datum(t.neueste).split(",")[0])}</span>
+        ${zustand.kategorie ? "" : `<span class="klein">${esc(t.kategorie)}</span>`}</div>
+    </a>`).join("");
+  ziel.innerHTML = `${chips}<div class="kacheln">${kacheln}</div>
+    <div class="fuss-zahl">${zustand.sendungen.length} Sendungen${zustand.sendungen.length >= 3000 ? " (die ersten 3000, oben suchen grenzt ein)" : ""}.
+      Kategorien sind aus Name und Beschreibung abgeleitet und nicht immer treffsicher.</div>`;
+}
+
 function stoebernZeichnen() {
   const ziel = $("#inhalt");
+  if (kachelAnsicht()) { sendungenZeichnen(); auswahlLeiste(); return; }
   const kopf = [];
-  const wo = zustand.sender || "allen Mediatheken";
-  if (zustand.sendung) {
-    kopf.push(`<div class="hinweis">${sym("filter")}<div>Sendung <strong>${esc(zustand.sendung)}</strong>
-      in ${esc(wo)}. <a href="${adresse(zustand.sender, "")}">Alle Sendungen zeigen</a></div></div>`);
+  if (!indexBereit() && !zustand.sendung && zustand.ansicht !== "neu") {
+    kopf.push(`<div class="hinweis">${sym("info")}<div>Die Übersicht nach Sendungen und Kategorien wird
+      gerade aufgebaut: Mediathekarr lädt einmal täglich die komplette Liste aller Mediatheken, das dauert
+      beim ersten Mal einige Minuten. Bis dahin hier die neuesten Beiträge.</div></div>`);
   }
-  if (!zustand.treffer.length) {
+  if (zustand.sendung) {
+    const zurueck = adresse(zustand.sender, "", { kategorie: zustand.kategorie });
+    kopf.push(`<div class="sendung-kopf">
+      ${bild(zustand.sender, zustand.sendung, "sendung-bild")}
+      <div><a class="zurueck" href="${zurueck}">${sym("zurueck")} Alle Sendungen${zustand.sender ? ` von ${esc(zustand.sender)}` : ""}</a>
+        <h2>${esc(zustand.sendung)}</h2>
+        <span class="klein">${zustand.gesamt} ${zustand.gesamt === 1 ? "Folge" : "Folgen"}, neueste zuerst</span></div>
+    </div>`);
+  }
+  // In einer geoeffneten Sendung filtert die Suche oben die Folgen.
+  const q = zustand.sendung ? zustand.suche.trim().toLowerCase() : "";
+  const liste = q ? zustand.treffer.filter((t) => `${t.title} ${t.description}`.toLowerCase().includes(q))
+                  : zustand.treffer;
+  if (!liste.length) {
     ziel.innerHTML = `${kopf.join("")}<p class="leer">${zustand.suche
       ? "Nichts gefunden. Anders schreiben oder „Auch kurze Beiträge“ einschalten."
       : "Hier ist gerade nichts."}</p>`;
@@ -170,16 +243,16 @@ function stoebernZeichnen() {
     return;
   }
 
-  const alle = zustand.treffer.filter((t) => !t.vorhanden).every((t) => zustand.markiert.has(t.id));
-  const zeilen = zustand.treffer.map((t) => {
+  const alle = liste.filter((t) => !t.vorhanden).every((t) => zustand.markiert.has(t.id));
+  const zeilen = liste.map((t) => {
     const m = zustand.markiert.has(t.id);
     const text = t.description ? t.description.slice(0, 160) + (t.description.length > 160 ? " …" : "") : "";
     return `<tr data-id="${esc(t.id)}"${m ? ' class="markiert"' : ""}>
       <td class="schmal"><input type="checkbox" data-marke ${m ? "checked" : ""} ${t.vorhanden ? "disabled" : ""}
           aria-label="Markieren"></td>
       <td class="schmal weg-klein">${esc(datum(t.published))}</td>
-      <td class="schmal weg-klein">${zustand.sender ? "" : `${esc(t.channel)}<br>`}
-        <button class="link" data-sendung="${esc(t.topic)}" title="Nur diese Sendung">${esc(t.topic)}</button></td>
+      ${zustand.sendung ? "" : `<td class="schmal weg-klein">${zustand.sender ? "" : `${esc(t.channel)}<br>`}
+        <button class="link" data-sendung="${esc(t.topic)}" title="Nur diese Sendung">${esc(t.topic)}</button></td>`}
       <td>${esc(t.title)}${text ? `<div class="klein" title="${esc(t.description)}">${esc(text)}</div>` : ""}</td>
       <td class="zahl schmal">${dauer(t.duration)}</td>
       <td class="schmal weg-klein">${t.hd ? etikett("HD", "info") : etikett("SD", "rahmen")}
@@ -195,13 +268,13 @@ function stoebernZeichnen() {
     <div class="tabelle-huelle"><table class="tabelle">
       <thead><tr>
         <th class="schmal"><input type="checkbox" data-alle ${alle ? "checked" : ""} aria-label="Alle markieren"></th>
-        <th class="weg-klein">Gesendet</th><th class="weg-klein">Sendung</th><th>Titel</th>
+        <th class="weg-klein">Gesendet</th>${zustand.sendung ? "" : '<th class="weg-klein">Sendung</th>'}<th>Titel</th>
         <th class="zahl">Dauer</th><th class="weg-klein">Qualität</th><th></th>
       </tr></thead>
       <tbody>${zeilen}</tbody>
     </table></div>
     ${mehr}
-    <div class="fuss-zahl">${zustand.treffer.length} Beiträge angezeigt, ${gesamt} insgesamt, neueste zuerst</div>`;
+    <div class="fuss-zahl">${liste.length} Beiträge angezeigt, ${gesamt} insgesamt, neueste zuerst</div>`;
   auswahlLeiste();
 }
 
@@ -289,16 +362,56 @@ function auswahlLeiste() {
 let ladeNummer = 0;
 
 async function statusHolen() {
+  const warBereit = indexBereit();
   try {
     zustand.status = await api("/api/status");
     $("#verbindung").hidden = true;
   } catch {
     $("#verbindung").hidden = false;
   }
+  // Sobald der Index fertig ist, die echten Sendernamen holen (ZDFinfo,
+  // ARTE.DE ...) statt der eingestellten Kurzliste.
+  if (indexBereit() && (!warBereit || !zustand.kanaele.length)) {
+    const k = await mitFehler(() => api("/api/kanaele"));
+    if (k) zustand.kanaele = k;
+  }
   navigation();
 }
 
+async function sendungenLaden() {
+  const nummer = ++ladeNummer;
+  const q = new URLSearchParams();
+  if (zustand.sender) q.set("kanal", zustand.sender);
+  if (zustand.kategorie) q.set("kategorie", zustand.kategorie);
+  if (zustand.suche.trim()) q.set("q", zustand.suche.trim());
+  const d = await mitFehler(() => api(`/api/sendungen?${q}`));
+  if (!d || nummer !== ladeNummer) return;
+  zustand.sendungen = d.sendungen ?? [];
+  zustand.kategorien = d.kategorien ?? [];
+  inhalt();
+}
+
+async function folgenLaden(anhaengen = false) {
+  const nummer = ++ladeNummer;
+  const q = new URLSearchParams({
+    kanal: zustand.sender, sendung: zustand.sendung,
+    offset: String(anhaengen ? zustand.weiter : 0),
+  });
+  if (!anhaengen) $("#inhalt").innerHTML = '<p class="laedt">Folgen werden geladen …</p>';
+  const d = await mitFehler(() => api(`/api/folgen?${q}`));
+  if (!d || nummer !== ladeNummer) return;
+  zustand.treffer = anhaengen ? zustand.treffer.concat(d.items) : d.items;
+  zustand.gesamt = d.total;
+  zustand.weiter = d.weiter;
+  if (!anhaengen) zustand.markiert.clear();
+  inhalt();
+}
+
 async function stoebernLaden(anhaengen = false) {
+  // Kacheln und Folgen kommen aus dem eigenen Index, "Neueste" und alles,
+  // solange der Index fehlt, live von MediathekViewWeb.
+  if (kachelAnsicht()) return sendungenLaden();
+  if (zustand.sendung && zustand.sender && indexBereit()) return folgenLaden(anhaengen);
   const nummer = ++ladeNummer;
   const q = new URLSearchParams({
     offset: String(anhaengen ? zustand.weiter : 0),
@@ -366,6 +479,8 @@ $("#werkzeug").addEventListener("click", (e) => {
   const k = e.target.closest("[data-wz]");
   if (!k) return;
   if (k.dataset.wz === "aktualisieren") neuLaden();
+  if (k.dataset.wz === "sendungen") location.hash = adresse(zustand.sender, "", { kategorie: zustand.kategorie });
+  if (k.dataset.wz === "neu") location.hash = adresse(zustand.sender, "", { ansicht: "neu" });
   if (k.dataset.wz === "markierte") {
     if (zustand.markiert.size) herunterladen([...zustand.markiert]);
     else meldung("Erst links Sendungen ankreuzen.", "warnung");
@@ -434,7 +549,9 @@ $("#suche").addEventListener("input", (e) => {
   zustand.suche = e.target.value;
   clearTimeout(tippPause);
   tippPause = setTimeout(() => {
-    if (zustand.seite === "stoebern") stoebernLaden();
+    // Die Folgen einer Sendung sind schon da, dort nur filtern.
+    if (zustand.seite === "stoebern" && zustand.sendung && indexBereit()) inhalt();
+    else if (zustand.seite === "stoebern") stoebernLaden();
     else if (zustand.seite === "indexer") indexerLaden();
   }, 450);
 });
@@ -447,16 +564,24 @@ function seiteWechseln() {
   const a = adresseLesen();
   const neueSeite = a.seite !== zustand.seite;
   zustand.seite = a.seite;
+  // Beim Wechsel zwischen Kacheln, Folgen und Neuesten gilt die Suche nicht
+  // mehr: sie meinte etwas anderes (Sendungsnamen, Folgentitel, alles).
+  const neueAnsicht = a.sendung !== zustand.sendung || a.ansicht !== zustand.ansicht || a.sender !== zustand.sender;
   zustand.sender = a.sender;
   zustand.sendung = a.sendung;
-  if (neueSeite) {
+  zustand.ansicht = a.ansicht;
+  zustand.kategorie = a.kategorie;
+  if (neueSeite || neueAnsicht) {
     zustand.suche = "";
     $("#suche").value = "";
     zustand.indexer = null;
   }
   const s = SEITEN[a.seite];
   $(".suche").hidden = !s.suche;
-  $("#suche").placeholder = s.suche ?? "";
+  $("#suche").placeholder = a.seite !== "stoebern" ? (s.suche ?? "")
+    : a.sendung ? "In diesen Folgen suchen"
+    : a.ansicht === "neu" ? "In den Beiträgen suchen"
+    : "Sendung suchen";
   document.title = `${zustand.sender || s.titel} – mediathekarr`;
   document.body.classList.remove("leiste-offen");
   zustand.markiert.clear();

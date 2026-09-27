@@ -16,6 +16,15 @@ builder.Services.AddHttpClient<MediathekViewClient>(c => c.Timeout = TimeSpan.Fr
 builder.Services.AddHttpClient<ArrClient>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton<SearchService>();
 builder.Services.AddSingleton<Fetcher>();
+builder.Services.AddSingleton<FilmIndex>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<FilmIndex>());
+builder.Services.AddSingleton<Thumbnails>();
+// Manche Sender liefern ihre Seiten nur an etwas, das wie ein Browser aussieht.
+builder.Services.AddHttpClient("bilder", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(15);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; mediathekarr)");
+});
 builder.Services.AddSingleton<DirectDownloader>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DirectDownloader>());
 builder.Services.AddHostedService<BlackholeWatcher>();
@@ -70,8 +79,9 @@ app.MapGet("/nzb/{id}", (string id, Database db) =>
 
 // ------------------------------------------------------------ Oberflaeche
 
-app.MapGet("/api/status", (Database db, DirectDownloader direct) => Results.Ok(new
+app.MapGet("/api/status", (Database db, DirectDownloader direct, FilmIndex index) => Results.Ok(new
 {
+    index = index.Current,
     version = typeof(Settings).Assembly.GetName().Version?.ToString(3),
     sender = cfg.Channels,
     mindestdauer = cfg.MinDurationSeconds,
@@ -79,6 +89,127 @@ app.MapGet("/api/status", (Database db, DirectDownloader direct) => Results.Ok(n
     quelle = cfg.ApiUrl,
     laufend = direct.Running.Count,
 }));
+
+// ------------------------------------------------ Stoebern im eigenen Index
+
+// Die Sender, die im Index stehen, mit ihren tatsaechlichen Namen
+// (ZDFinfo, ARTE.DE ...). Solange der Index noch nicht fertig ist, die
+// eingestellte Liste.
+app.MapGet("/api/kanaele", (FilmIndex index) =>
+{
+    if (!index.Current.Ready)
+        return Results.Ok(cfg.Channels.Select(c => new { name = c, sendungen = 0 }));
+    using var c = index.Open();
+    using var cmd = c.CreateCommand();
+    cmd.CommandText = "SELECT channel, COUNT(*) FROM topic GROUP BY channel ORDER BY channel COLLATE NOCASE";
+    using var r = cmd.ExecuteReader();
+    var list = new List<object>();
+    while (r.Read()) list.Add(new { name = r.GetString(0), sendungen = r.GetInt32(1) });
+    return Results.Ok(list);
+});
+
+// Sendereihen eines Senders (oder aller), mit den Kategorien und ihrer
+// Anzahl fuer die Auswahl oben. Eingeschraenkt nach Kategorie und Suchwort.
+app.MapGet("/api/sendungen", (string? kanal, string? kategorie, string? q, FilmIndex index) =>
+{
+    if (!index.Current.Ready) return Results.Ok(new { bereit = false });
+    using var c = index.Open();
+
+    var where = new List<string>();
+    using var counts = c.CreateCommand();
+    using var list = c.CreateCommand();
+    foreach (var cmd in new[] { counts, list })
+    {
+        if (!string.IsNullOrWhiteSpace(kanal)) cmd.Parameters.AddWithValue("$k", kanal);
+        if (!string.IsNullOrWhiteSpace(q)) cmd.Parameters.AddWithValue("$q", $"%{q.Trim()}%");
+        if (!string.IsNullOrWhiteSpace(kategorie)) cmd.Parameters.AddWithValue("$cat", kategorie);
+    }
+    if (!string.IsNullOrWhiteSpace(kanal)) where.Add("channel = $k");
+    if (!string.IsNullOrWhiteSpace(q)) where.Add("topic LIKE $q");
+    var baseWhere = where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "";
+
+    counts.CommandText = $"SELECT category, COUNT(*) FROM topic{baseWhere} GROUP BY category";
+    var cats = new Dictionary<string, int>();
+    using (var r = counts.ExecuteReader())
+        while (r.Read()) cats[r.GetString(0)] = r.GetInt32(1);
+
+    if (!string.IsNullOrWhiteSpace(kategorie)) where.Add("category = $cat");
+    var fullWhere = where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "";
+    // Grosse Reihen zuerst waere eine Hitparade; A-Z findet man wieder.
+    list.CommandText = $"""
+        SELECT channel, topic, category, films, newest FROM topic{fullWhere}
+         ORDER BY topic COLLATE NOCASE LIMIT 3000
+        """;
+    var shows = new List<object>();
+    using (var r = list.ExecuteReader())
+        while (r.Read())
+            shows.Add(new
+            {
+                kanal = r.GetString(0), name = r.GetString(1), kategorie = r.GetString(2),
+                folgen = r.GetInt32(3), neueste = DateTimeOffset.FromUnixTimeSeconds(r.GetInt64(4)),
+            });
+
+    return Results.Ok(new
+    {
+        bereit = true,
+        kategorien = Categorizer.All.Where(cats.ContainsKey).Select(k => new { name = k, anzahl = cats[k] }),
+        sendungen = shows,
+    });
+});
+
+// Die Folgen einer Sendereihe aus dem Index, neueste zuerst.
+app.MapGet("/api/folgen", (string kanal, string sendung, int? offset, FilmIndex index, DirectDownloader direct) =>
+{
+    if (!index.Current.Ready) return Results.Ok(new { total = 0, weiter = 0, items = Array.Empty<object>() });
+    using var c = index.Open();
+    using var cmd = c.CreateCommand();
+    cmd.CommandText = """
+        SELECT channel, topic, title, description, ts, duration, size, url, url_hd, url_low, subtitle,
+               (SELECT COUNT(*) FROM film WHERE channel = $k AND topic = $t)
+          FROM film WHERE channel = $k AND topic = $t ORDER BY ts DESC LIMIT 100 OFFSET $o
+        """;
+    cmd.Parameters.AddWithValue("$k", kanal);
+    cmd.Parameters.AddWithValue("$t", sendung);
+    cmd.Parameters.AddWithValue("$o", Math.Max(0, offset ?? 0));
+    var items = new List<MediathekItem>();
+    long total = 0;
+    using (var r = cmd.ExecuteReader())
+        while (r.Read())
+        {
+            items.Add(new MediathekItem(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
+                r.GetInt64(4), r.GetInt32(5), r.GetInt64(6), r.GetString(7), r.GetString(8),
+                r.GetString(9), r.GetString(10)));
+            total = r.GetInt64(11);
+        }
+    direct.Remember(items);
+    return Results.Ok(new
+    {
+        total,
+        weiter = Math.Max(0, offset ?? 0) + 100,
+        items = items.Select(i => ToView(i, direct)),
+    });
+});
+
+// Vorschaubild einer Sendereihe, von der Webseite ihrer neuesten Folge.
+app.MapGet("/api/bild", async (string kanal, string sendung, FilmIndex index, Thumbnails thumbs,
+                               HttpResponse res) =>
+{
+    if (!index.Current.Ready) return Results.NotFound();
+    string? website;
+    using (var c = index.Open())
+    using (var cmd = c.CreateCommand())
+    {
+        cmd.CommandText = "SELECT website FROM topic WHERE channel = $k AND topic = $t";
+        cmd.Parameters.AddWithValue("$k", kanal);
+        cmd.Parameters.AddWithValue("$t", sendung);
+        website = cmd.ExecuteScalar() as string;
+    }
+    var file = website is null ? null : await thumbs.GetAsync(website);
+    if (file is null) return Results.NotFound();
+    // Ein Tag im Browser: das Bild einer Reihe aendert sich selten.
+    res.Headers.CacheControl = "public, max-age=86400";
+    return Results.File(file, "image/jpeg");
+});
 
 // Stoebern: die neuesten Sendungen einer Mediathek, seitenweise.
 app.MapGet("/api/browse", async (string? channel, string? topic, string? q, int? offset, int? size,
@@ -92,15 +223,7 @@ app.MapGet("/api/browse", async (string? channel, string? topic, string? q, int?
     {
         total,
         weiter = next,
-        items = items.Select(i => new
-        {
-            i.Id, i.Channel, i.Topic, i.Title, i.Description,
-            published = i.Published, i.Duration, i.Size,
-            hd = !string.IsNullOrWhiteSpace(i.UrlVideoHd),
-            untertitel = !string.IsNullOrWhiteSpace(i.UrlSubtitle),
-            vorhanden = direct.Exists(i),
-            laedt = direct.IsPending(i.Id),
-        }),
+        items = items.Select(i => ToView(i, direct)),
     });
 });
 
@@ -129,6 +252,18 @@ app.MapGet("/api/search", async (string q, SearchService search, CancellationTok
 
 app.Run();
 return;
+
+// Ein Beitrag so, wie die Oberflaeche ihn braucht. Gemeinsam fuer die
+// Live-Abfrage und den Index, damit beide Listen gleich aussehen.
+static object ToView(MediathekItem i, DirectDownloader direct) => new
+{
+    i.Id, i.Channel, i.Topic, i.Title, i.Description,
+    published = i.Published, i.Duration, i.Size,
+    hd = !string.IsNullOrWhiteSpace(i.UrlVideoHd),
+    untertitel = !string.IsNullOrWhiteSpace(i.UrlSubtitle),
+    vorhanden = direct.Exists(i),
+    laedt = direct.IsPending(i.Id),
+};
 
 static string Caps() =>
     """

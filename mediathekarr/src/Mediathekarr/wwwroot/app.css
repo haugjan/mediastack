@@ -366,3 +366,53 @@ input[type=checkbox] { accent-color: var(--marke); }
 .link:hover { text-decoration: underline; }
 .mehr { display: flex; justify-content: center; margin: 16px 0; }
 .wz-filter input[type=checkbox] { width: 16px; height: 16px; }
+
+/* Umschalter Sendungen/Neueste in der Werkzeugleiste */
+.wz.gewaehlt { color: var(--marke); }
+
+/* Kategorien als Auswahl ueber den Kacheln */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 16px;
+  border: 1px solid var(--linie); background: var(--flaeche); color: var(--text);
+  text-decoration: none; font-size: 13px;
+}
+.chip span { color: var(--schwach); font-size: 12px; }
+.chip:hover { border-color: var(--marke); }
+.chip.aktiv { background: var(--marke); border-color: var(--marke); color: #fff; }
+.chip.aktiv span { color: rgba(255, 255, 255, 0.8); }
+
+/* Sendungen als Kacheln, wie die Posteransicht in Sonarr - nur quer, weil
+   die Sender Vorschaubilder im Fernsehformat liefern. */
+.kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
+.kachel {
+  display: flex; flex-direction: column; border-radius: 4px; overflow: hidden;
+  background: var(--flaeche); color: var(--text); text-decoration: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); transition: transform 0.1s, box-shadow 0.1s;
+}
+.kachel:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18); }
+.kachel-bild, .sendung-bild {
+  position: relative; aspect-ratio: 16 / 9; background: var(--standard-bg); overflow: hidden;
+}
+.kachel-bild img, .sendung-bild img {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+}
+.initial {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 42px; font-weight: 300; color: var(--schwach);
+}
+.kachel-text { display: flex; flex-direction: column; gap: 2px; padding: 9px 11px 11px; }
+.kachel-text strong {
+  font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Kopf einer geoeffneten Sendung */
+.sendung-kopf { display: flex; gap: 20px; align-items: center; margin-bottom: 20px; }
+.sendung-kopf .sendung-bild { width: 260px; flex: none; border-radius: 4px; }
+.sendung-kopf h2 { margin: 6px 0 2px; font-size: 22px; font-weight: 500; }
+.zurueck { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; text-decoration: none; }
+.zurueck .sym { width: 14px; height: 14px; }
+@media (max-width: 768px) {
+  .kacheln { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .sendung-kopf .sendung-bild { width: 120px; }
+}

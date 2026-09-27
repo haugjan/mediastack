@@ -478,6 +478,10 @@ services:
       # "Mediathek". Unter /media, weil sie dort bleiben, statt wie die
       # Blackhole-Dateien von Sonarr oder Radarr abgeholt zu werden.
       MEDIATHEKARR_LIBRARY: /data/media/mediathek
+      # Die komplette Liste aller Mediatheken fuers Stoebern nach Sendung
+      # und Kategorie, einmal taeglich geladen (77 MB).
+      MEDIATHEKARR_FILMLISTE: ${MEDIATHEKARR_FILMLISTE:-https://liste.mediathekview.de/Filmliste-akt.xz}
+      MEDIATHEKARR_FILMLISTE_HOURS: ${MEDIATHEKARR_FILMLISTE_HOURS:-24}
       MEDIATHEKARR_DB: /config/mediathekarr.db
       MEDIATHEKARR_MIN_DURATION: ${MEDIATHEKARR_MIN_DURATION:-600}
       MEDIATHEKARR_CHANNELS: ${MEDIATHEKARR_CHANNELS:-}
